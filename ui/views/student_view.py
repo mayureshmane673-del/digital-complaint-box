@@ -1,0 +1,1117 @@
+"""
+ui/views/student_view.py: Student portal view with complaint submission wizard,
+animated registered vs resolved chart, responsive reflow, loading state prevention,
+private anonymous tracking, hostel status, and feedback rating.
+"""
+
+import weakref
+from typing import Dict, Any, Optional, List
+from datetime import datetime
+import flet as ft
+from services.complaint_service import ComplaintService
+from services.feedback_service import FeedbackService
+from services.hostel_service import HostelService
+from services.storage_service import StorageService
+from services.analytics_service import AnalyticsService
+from database.supabase_client import get_supabase_client, get_trusted_backend_client
+from ui.theme import (
+    COLOR_PRIMARY, COLOR_SURFACE, COLOR_BORDER, COLOR_TEXT_PRIMARY,
+    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors
+)
+from ui.state import AppState
+from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
+from ui.components.stat_card import create_stat_card
+from ui.components.complaint_card import create_complaint_card
+from ui.components.complaint_detail import show_complaint_detail_dialog
+from ui.components.animated_chart import (
+    create_registered_vs_resolved_chart,
+    create_priority_distribution_chart,
+    create_category_distribution_chart
+)
+from utils.validators import validate_description, validate_attachment
+from models.user import UserRole
+
+BASELINE_SUBCATEGORIES = {
+    "Cleaning & Hygiene": [
+        "Classroom Cleaning", "Laboratory Cleaning", "Washroom Cleaning",
+        "Campus Cleaning", "Canteen Hygiene", "Hostel Cleaning",
+        "Dustbins / Waste Disposal", "Pest / Insect Problem", "Other Cleaning Issue"
+    ],
+    "Infrastructure": [
+        "Building Damage", "Classroom Damage", "Laboratory Infrastructure",
+        "Furniture / Desk / Bench", "Door / Window", "Roof / Ceiling",
+        "Flooring", "Fan / Ventilation", "Lift / Accessibility",
+        "Other Infrastructure Issue"
+    ],
+    "Electricity": [
+        "Lights", "Fans", "Power Supply", "Switch / Socket",
+        "Electrical Short Circuit", "Generator / Backup", "Wiring",
+        "Other Electrical Issue"
+    ],
+    "Water & Sanitation": [
+        "Drinking Water", "Water Supply", "Water Leakage", "Drainage",
+        "Washroom Water", "Water Cooler / Filter", "Sewage / Drain Problem",
+        "Other Water / Sanitation Issue"
+    ],
+    "IT & Computer": [
+        "Computer Not Working", "Computer Hardware", "Internet / Wi-Fi",
+        "Network Connectivity", "Printer", "Projector", "Software Problem",
+        "Lab Login / Access", "IT Equipment", "Other IT Issue"
+    ],
+    "Academics": [
+        "Timetable", "Examination", "Practical / Lab", "Assignment",
+        "Syllabus", "Internal Assessment", "Result / Marks",
+        "Academic Schedule", "Classroom Allocation", "Other Academic Issue"
+    ],
+    "Faculty": [
+        "Teaching Quality", "Attendance", "Faculty Availability",
+        "Faculty Behaviour", "Communication", "Academic Guidance",
+        "Doubt / Query Resolution", "Other Faculty Issue"
+    ],
+    "Canteen": [
+        "Food Quality", "Food Hygiene", "Pricing", "Food Availability",
+        "Service", "Seating / Cleanliness", "Water / Beverage",
+        "Other Canteen Issue"
+    ],
+    "Hostel": [
+        "Hostel Room", "Hostel Washroom", "Hostel Food", "Hostel Water",
+        "Hostel Electricity", "Hostel Cleaning", "Hostel Security",
+        "Hostel Furniture", "Hostel Internet", "Room Allocation",
+        "Other Hostel Issue"
+    ],
+    "Transport": [
+        "Bus", "Bus Timing", "Bus Route", "Driver", "Service Quality",
+        "Bus Capacity", "Bus Safety", "Other Transport Issue"
+    ],
+    "Student Related": [
+        "Misconduct", "Ragging / Harassment", "Lost & Found",
+        "Student Discipline", "Student Behaviour", "Academic Misconduct",
+        "ID Card / Student Document", "Other Student Related Issue"
+    ],
+    "Security & Safety": [
+        "Security Staff", "CCTV", "Emergency", "Unsafe Condition",
+        "Fire Safety", "Theft / Security Incident", "Entry / Exit Control",
+        "Other Safety Issue"
+    ],
+    "Library": [
+        "Book Availability", "Book Issue / Return", "Library Membership",
+        "Library Timing", "Seating / Study Area", "Library Cleanliness",
+        "Computer / Digital Library", "Internet / Wi-Fi", "Reference Material",
+        "Lost / Damaged Book", "Library Staff Behaviour", "Other Library Issue"
+    ],
+    "Other": [
+        "General / Other", "Other / Custom Subcategory"
+    ]
+}
+
+
+class StudentView:
+    def __init__(self, page: ft.Page, student: Dict[str, Any]):
+        self.page = page
+        self.student = student
+        self.student_id = student["id"]
+        self.roll_number = student["roll_number"]
+        self.department_id = student["department_id"]
+        self.selected_tab_index = 0
+        self.cached_complaints = None
+        self.active_container = ft.Container(expand=True)
+        self.subcategories_by_cat = {}
+        self._load_reference_data()
+
+    def _load_reference_data(self):
+        from services.cache_service import CacheService
+        self.categories, self.subcategories_by_cat, self.locations = CacheService.get_categories_and_subcategories()
+
+    def render(self) -> ft.Control:
+        self._switch_view(self.selected_tab_index)
+        return self.active_container
+
+    def _switch_view(self, index: int):
+        self.selected_tab_index = index
+        if index == 0:
+            self.active_container.content = self._render_dashboard()
+        elif index == 1:
+            self.active_container.content = self._render_new_complaint()
+        elif index == 2:
+            self.active_container.content = self._render_my_complaints()
+        elif index == 3:
+            self.active_container.content = self._render_feedback()
+        elif index == 4:
+            self.active_container.content = self._render_hostel_status()
+        elif index == 5:
+            from ui.views.account_view import AccountView
+            self.active_container.content = AccountView(
+                self.page,
+                self.student,
+                UserRole.STUDENT.value,
+                on_refresh=lambda: self._switch_view(self.selected_tab_index)
+            ).render()
+        self.page.update()
+
+    # -------------------------------------------------------------------------
+    # TAB 0: DASHBOARD
+    # -------------------------------------------------------------------------
+    def _render_dashboard(self) -> ft.Control:
+        is_dark = AppState.is_dark_mode
+        colors = get_theme_colors(is_dark)
+
+        if self.cached_complaints is None:
+            self.cached_complaints = ComplaintService.get_complaints_for_user(
+                role="Student",
+                user_id=self.student_id,
+                department_id=self.department_id
+            )
+        complaints = self.cached_complaints
+
+        total = len(complaints)
+        pending = sum(1 for c in complaints if c.get("status") == "Pending")
+        in_prog = sum(1 for c in complaints if c.get("status") == "In Progress")
+        resolved = sum(1 for c in complaints if c.get("status") == "Resolved")
+        rejected = sum(1 for c in complaints if c.get("status") == "Rejected")
+
+        # Stat cards
+        stats_row = ft.Row(
+            controls=[
+                create_stat_card("Total Submitted", str(total), ft.Icons.FOLDER_SPECIAL, colors["primary"], is_dark=is_dark),
+                create_stat_card("Pending Review", str(pending), ft.Icons.HOURGLASS_EMPTY, "#d97706", is_dark=is_dark),
+                create_stat_card("In Progress", str(in_prog), ft.Icons.AUTORENEW, "#2563eb", is_dark=is_dark),
+                create_stat_card("Resolved", str(resolved), ft.Icons.CHECK_CIRCLE, "#059669", is_dark=is_dark),
+                create_stat_card("Rejected", str(rejected), ft.Icons.CANCEL, "#dc2626", is_dark=is_dark)
+            ],
+            wrap=True,
+            spacing=12
+        )
+
+        # Animated Charts
+        chart_card = create_registered_vs_resolved_chart(
+            registered=total,
+            resolved=resolved,
+            in_progress=in_prog,
+            pending=pending,
+            rejected=rejected,
+            title="My Grievance Resolution Analytics",
+            subtitle="Personal grievance tracking and status breakdown",
+            is_dark=is_dark
+        )
+        prio_card = create_priority_distribution_chart(
+            complaints=complaints,
+            title="My Priority Breakdown",
+            subtitle="Grievances categorized by urgency level",
+            is_dark=is_dark
+        )
+        charts_row = ft.ResponsiveRow(
+            controls=[
+                ft.Container(chart_card, col={"xs": 12, "md": 7}),
+                ft.Container(prio_card, col={"xs": 12, "md": 5})
+            ],
+            spacing=12,
+            run_spacing=12
+        )
+
+        # Recent complaints list
+        recent_cards = []
+        for c in complaints[:4]:
+            recent_cards.append(create_complaint_card(c, self._open_detail_dialog))
+
+        if not recent_cards:
+            recent_cards.append(
+                ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            ft.Icon(ft.Icons.MARK_EMAIL_READ_OUTLINED, size=48, color=colors["text_muted"]),
+                            ft.Text("No complaints registered yet.", size=14, color=colors["text_muted"]),
+                            ft.ElevatedButton(
+                                content=ft.Text("Register First Complaint"),
+                                icon=ft.Icons.ADD,
+                                style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
+                                on_click=lambda _: self._switch_view(1)
+                            )
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER
+                    ),
+                    padding=32
+                )
+            )
+
+        return ft.Column(
+            controls=[
+                ft.Row(
+                    controls=[
+                        ft.Column(
+                            controls=[
+                                ft.Text(f"Welcome back, {self.student.get('full_name')}!", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                                ft.Text(f"Roll Number: {self.roll_number} | Year: {self.student.get('year', 'N/A')}", size=13, color=colors["text_muted"])
+                            ],
+                            spacing=2
+                        ),
+                        ft.ElevatedButton(
+                            content=ft.Text("New Complaint"),
+                            icon=ft.Icons.ADD_COMMENT,
+                            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
+                            on_click=lambda _: self._switch_view(1)
+                        )
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    wrap=True
+                ),
+                stats_row,
+                charts_row,
+                ft.Divider(color=colors["border"]),
+                ft.Text("Recent Grievances", size=18, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                ft.Column(controls=recent_cards, spacing=8)
+            ],
+            scroll=ft.ScrollMode.AUTO,
+            spacing=16,
+            expand=True
+        )
+
+    # -------------------------------------------------------------------------
+    # TAB 1: NEW COMPLAINT WIZARD
+    # -------------------------------------------------------------------------
+    def _render_new_complaint(self) -> ft.Control:
+        is_dark = AppState.is_dark_mode
+        colors = get_theme_colors(is_dark)
+
+        title_field = ft.TextField(label="Complaint Title", hint_text="Brief summary of the issue", dense=True)
+
+        char_counter = ft.Text("0 / 1000 characters (min 10)", size=11, color=colors["text_muted"])
+        desc_field = ft.TextField(
+            label="Detailed Description",
+            hint_text="Explain the grievance clearly with location specifics (10 to 1000 characters).",
+            multiline=True,
+            min_lines=3,
+            max_lines=6,
+            dense=True
+        )
+
+        def on_desc_change(e):
+            n = len(desc_field.value or "")
+            char_counter.value = f"{n} / 1000 characters (min 10)"
+            char_counter.color = "#dc2626" if (n < 10 or n > 1000) else "#059669"
+            self.page.update()
+
+        desc_field.on_change = on_desc_change
+
+        cat_options = [ft.dropdown.Option(key=str(c["id"]), text=str(c["name"])) for c in self.categories]
+        self.category_dropdown = category_dropdown = ft.Dropdown(label="Category", options=cat_options, dense=True, expand=True)
+        custom_cat_field = ft.TextField(label="Specify Custom Category / Subcategory", dense=True, visible=False, expand=True)
+
+        def on_subcat_change(e):
+            val = subcategory_dropdown.value
+            custom_cat_field.visible = (val == "OTHER")
+            self.page.update()
+
+        self.subcategory_dropdown = subcategory_dropdown = ft.Dropdown(
+            label="Subcategory (Select Category First)",
+            options=[ft.dropdown.Option(key="OTHER", text="Other / Custom Subcategory")],
+            dense=True,
+            expand=True,
+            on_change=on_subcat_change
+        )
+        self.subcat_holder = subcat_holder = ft.Container(content=subcategory_dropdown, expand=True)
+
+        def on_cat_change(e):
+            cat_id = category_dropdown.value or (e.control.value if e else None)
+            cat_name = ""
+            for c in self.categories:
+                if str(c.get("id")) == str(cat_id) or str(c.get("name")) == str(cat_id):
+                    cat_name = str(c.get("name", ""))
+                    break
+
+            subs = []
+            if cat_id and str(cat_id) in self.subcategories_by_cat:
+                subs = self.subcategories_by_cat[str(cat_id)]
+            elif cat_name and cat_name.strip().lower() in self.subcategories_by_cat:
+                subs = self.subcategories_by_cat[cat_name.strip().lower()]
+            elif cat_name and cat_name in BASELINE_SUBCATEGORIES:
+                subs = [{"id": f"base_{s.lower()}", "name": s} for s in BASELINE_SUBCATEGORIES[cat_name]]
+
+            seen = set()
+            opts = []
+            for s in subs:
+                sname = str(s.get("name", "")).strip()
+                if sname and sname.lower() not in seen:
+                    seen.add(sname.lower())
+                    opts.append(ft.dropdown.Option(key=str(s["id"]), text=sname))
+
+            opts.append(ft.dropdown.Option(key="OTHER", text="Other / Custom Subcategory"))
+
+            lbl = f"Subcategory ({len(opts)-1} available)" if (len(opts) > 1) else "Subcategory"
+            subcategory_dropdown.label = lbl
+            subcategory_dropdown.options = opts
+            subcategory_dropdown.value = None
+
+            if cat_name.lower() == "other":
+                custom_cat_field.visible = True
+                subcategory_dropdown.value = "OTHER"
+            else:
+                custom_cat_field.visible = False
+
+            try:
+                subcategory_dropdown.update()
+            except Exception:
+                pass
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        category_dropdown.on_change = on_cat_change
+
+        loc_options = [ft.dropdown.Option(l["id"], l["name"]) for l in self.locations]
+        loc_options.append(ft.dropdown.Option("OTHER", "Other / Custom Location"))
+        location_dropdown = ft.Dropdown(label="Location", options=loc_options, dense=True, expand=True)
+        custom_loc_field = ft.TextField(label="Specify Custom Location", dense=True, visible=False, expand=True)
+
+        def on_loc_change(e):
+            custom_loc_field.visible = (location_dropdown.value == "OTHER")
+            self.page.update()
+
+        location_dropdown.on_select = on_loc_change
+        location_dropdown.on_change = on_loc_change
+
+        priority_dropdown = ft.Dropdown(
+            label="Priority",
+            options=[
+                ft.dropdown.Option("Low"),
+                ft.dropdown.Option("Medium"),
+                ft.dropdown.Option("High"),
+                ft.dropdown.Option("Urgent")
+            ],
+            value="Low",
+            dense=True,
+            width=160
+        )
+
+        anonymous_checkbox = ft.Checkbox(
+            label="Submit Anonymously (Identity strictly hidden from all staff & administration)",
+            value=False
+        )
+
+        is_approved_hostel = self.student.get("is_hostel_approved", False)
+        hostel_checkbox = ft.Checkbox(
+            label="Hostel-related Complaint",
+            value=False,
+            disabled=not is_approved_hostel
+        )
+        hostel_note = ft.Text(
+            "Hostel complaints require Hostel Incharge residency approval." if not is_approved_hostel else "Enabled (Approved hostel resident).",
+            size=11,
+            color=colors["text_muted"] if is_approved_hostel else "#dc2626"
+        )
+
+        # File picker for attachments (Max 2)
+        selected_files: List[Dict[str, Any]] = []
+        files_display = ft.Column(spacing=4)
+        file_picker = ft.FilePicker()
+        if hasattr(self.page, "services"):
+            if file_picker not in self.page.services:
+                self.page.services.append(file_picker)
+        elif hasattr(self.page, "_services"):
+            try:
+                self.page._services.register_service(file_picker)
+            except Exception:
+                pass
+        try:
+            file_picker._parent = weakref.ref(self.page)
+        except Exception:
+            pass
+
+        # In-form alert box
+        alert_box = ft.Container(
+            content=ft.Row(
+                controls=[
+                    ft.Icon(ft.Icons.INFO_OUTLINE, size=18, color=ft.Colors.WHITE),
+                    ft.Text("", size=13, weight=ft.FontWeight.W_500, color=ft.Colors.WHITE, expand=True)
+                ],
+                spacing=10
+            ),
+            border_radius=8,
+            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            visible=False
+        )
+
+        def show_alert(msg: str, is_error: bool = True):
+            alert_box.visible = True
+            alert_box.bgcolor = "#dc2626" if is_error else "#059669"
+            alert_box.content.controls[0].name = ft.Icons.ERROR_OUTLINE if is_error else ft.Icons.CHECK_CIRCLE_OUTLINE
+            alert_box.content.controls[1].value = msg
+            self.page.update()
+
+        async def on_pick_attachment(e):
+            try:
+                files = await file_picker.pick_files(
+                    file_type=ft.FilePickerFileType.CUSTOM,
+                    allowed_extensions=["jpg", "jpeg", "png", "webp", "mp4", "mov", "pdf"],
+                    allow_multiple=True,
+                    with_data=True
+                )
+                if not files:
+                    return
+                for f in files:
+                    if len(selected_files) >= 2:
+                        show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
+                        break
+                    valid, err = validate_attachment(f.name, f.size)
+                    if not valid:
+                        show_feedback_message(self.page, err, is_error=True)
+                        continue
+                    selected_files.append({
+                        "name": f.name,
+                        "bytes": f.bytes,
+                        "path": f.path,
+                        "size": f.size
+                    })
+                    files_display.controls.append(
+                        ft.Row(
+                            controls=[
+                                ft.Icon(ft.Icons.ATTACH_FILE, size=16, color=colors["primary"]),
+                                ft.Text(f"{f.name} ({f.size / 1024:.1f} KB)", size=12, color=colors["text"])
+                            ],
+                            spacing=6
+                        )
+                    )
+                self.page.update()
+            except Exception:
+                show_feedback_message(self.page, "Unable to select attachment. Please try again.", is_error=True)
+
+        submit_btn = ft.ElevatedButton(
+            content=ft.Text("Submit Complaint"),
+            icon=ft.Icons.SEND,
+            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+        )
+
+        def submit_form(e):
+            val_desc, err = validate_description(desc_field.value or "")
+            if not val_desc:
+                show_alert(err, is_error=True)
+                show_feedback_message(self.page, err, is_error=True)
+                return
+
+            if not category_dropdown.value:
+                show_alert("Please select a Category.", is_error=True)
+                show_feedback_message(self.page, "Please select a Category.", is_error=True)
+                return
+
+            subcat_ctrl = getattr(self, "subcategory_dropdown", None) or subcat_holder.content
+            selected_subcat = subcat_ctrl.value if subcat_ctrl else None
+            custom_cat_val = (custom_cat_field.value or "").strip()
+
+            subcat_id = None
+            subcat_custom_str = None
+            if selected_subcat == "OTHER":
+                if not custom_cat_val:
+                    show_alert("Please specify the custom category/subcategory details.", is_error=True)
+                    show_feedback_message(self.page, "Please specify the custom category/subcategory details.", is_error=True)
+                    return
+                subcat_custom_str = custom_cat_val
+            elif selected_subcat:
+                if len(str(selected_subcat)) == 36 and "-" in str(selected_subcat):
+                    subcat_id = selected_subcat
+                else:
+                    subcat_custom_str = str(selected_subcat)
+
+            final_desc = desc_field.value or ""
+            if subcat_custom_str:
+                final_desc = f"[Custom Subcategory: {subcat_custom_str}]\n" + final_desc
+
+            loc_id = location_dropdown.value if location_dropdown.value != "OTHER" else None
+            custom_loc = custom_loc_field.value if location_dropdown.value == "OTHER" else None
+
+            submit_btn.disabled = True
+            submit_btn.content = ft.Text("Submitting Grievance...")
+            alert_box.visible = False
+            self.page.update()
+
+            try:
+                ok, msg, created_comp = ComplaintService.submit_complaint(
+                    student_id=self.student_id,
+                    title=title_field.value or "",
+                    description=final_desc,
+                    department_id=self.department_id,
+                    category_id=category_dropdown.value,
+                    subcategory_id=subcat_id,
+                    location_id=loc_id,
+                    priority=priority_dropdown.value or "Low",
+                    is_anonymous=anonymous_checkbox.value,
+                    is_hostel=hostel_checkbox.value,
+                    location_custom=custom_loc
+                )
+
+                if ok and created_comp:
+                    cid = created_comp["complaint_id"]
+                    for f_info in selected_files:
+                        try:
+                            StorageService.upload_attachment(
+                                complaint_id=cid,
+                                local_file_path=f_info.get("path"),
+                                original_filename=f_info.get("name"),
+                                file_bytes=f_info.get("bytes")
+                            )
+                        except Exception:
+                            pass
+
+                    show_feedback_message(self.page, f"Complaint #{cid} registered successfully!", is_error=False)
+                    self.cached_complaints = None
+                    self._switch_view(2)  # Switch to My Complaints
+                else:
+                    submit_btn.disabled = False
+                    submit_btn.content = ft.Text("Submit Complaint")
+                    show_alert(msg, is_error=True)
+                    show_feedback_message(self.page, msg, is_error=True)
+            except Exception as ex:
+                submit_btn.disabled = False
+                submit_btn.content = ft.Text("Submit Complaint")
+                err_msg = "Unable to submit grievance. Please verify your connection."
+                show_alert(err_msg, is_error=True)
+                show_feedback_message(self.page, err_msg, is_error=True)
+
+        submit_btn.on_click = submit_form
+
+        return ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Text("Register New Grievance", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                    alert_box,
+                    title_field,
+                    desc_field,
+                    char_counter,
+                    ft.ResponsiveRow(
+                        controls=[
+                            ft.Container(category_dropdown, col={"xs": 12, "sm": 6}),
+                            ft.Container(subcat_holder, col={"xs": 12, "sm": 6})
+                        ]
+                    ),
+                    custom_cat_field,
+                    ft.ResponsiveRow(
+                        controls=[
+                            ft.Container(location_dropdown, col={"xs": 12, "sm": 6}),
+                            ft.Container(custom_loc_field, col={"xs": 12, "sm": 6})
+                        ]
+                    ),
+                    ft.Row(controls=[priority_dropdown]),
+                    anonymous_checkbox,
+                    ft.ResponsiveRow(
+                        controls=[
+                            ft.Container(hostel_checkbox, col={"xs": 12, "sm": 6}),
+                            ft.Container(hostel_note, col={"xs": 12, "sm": 6})
+                        ]
+                    ),
+                    ft.Divider(color=colors["border"]),
+                    ft.Text("Attachments (Max 2 files, up to 10MB each: JPG, PNG, WEBP, MP4, MOV, PDF)", size=13, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                    ft.Row(
+                        controls=[
+                            ft.ElevatedButton(
+                                content=ft.Text("Add Attachment"),
+                                icon=ft.Icons.ATTACH_FILE,
+                                on_click=on_pick_attachment
+                            )
+                        ]
+                    ),
+                    files_display,
+                    ft.Divider(color=colors["border"]),
+                    submit_btn
+                ],
+                spacing=12,
+                scroll=ft.ScrollMode.AUTO
+            ),
+            bgcolor=colors["surface"],
+            border=ft.Border.all(1, colors["border"]),
+            border_radius=14,
+            padding=24,
+            expand=True
+        )
+
+    # -------------------------------------------------------------------------
+    # TAB 2: MY COMPLAINTS & EDITING
+    # -------------------------------------------------------------------------
+    def _render_my_complaints(self) -> ft.Control:
+        is_dark = AppState.is_dark_mode
+        colors = get_theme_colors(is_dark)
+
+        search_field = ft.TextField(hint_text="Search complaints by ID, title, or description...", prefix_icon=ft.Icons.SEARCH, dense=True, expand=True)
+        status_filter = ft.Dropdown(
+            label="Status",
+            options=[
+                ft.dropdown.Option("ALL", "All Statuses"),
+                ft.dropdown.Option("Pending", "Pending"),
+                ft.dropdown.Option("In Progress", "In Progress"),
+                ft.dropdown.Option("Resolved", "Resolved"),
+                ft.dropdown.Option("Rejected", "Rejected")
+            ],
+            value="ALL",
+            dense=True,
+            width=140
+        )
+        priority_filter = ft.Dropdown(
+            label="Priority",
+            options=[
+                ft.dropdown.Option("ALL", "All Priorities"),
+                ft.dropdown.Option("Urgent", "Urgent"),
+                ft.dropdown.Option("High", "High"),
+                ft.dropdown.Option("Medium", "Medium"),
+                ft.dropdown.Option("Low", "Low")
+            ],
+            value="ALL",
+            dense=True,
+            width=140
+        )
+
+        cat_filter_opts = [ft.dropdown.Option("ALL", "All Categories")]
+        for c in self.categories:
+            cat_filter_opts.append(ft.dropdown.Option(str(c.get("name")), str(c.get("name"))))
+
+        category_filter = ft.Dropdown(
+            label="Category",
+            options=cat_filter_opts,
+            value="ALL",
+            dense=True,
+            width=160
+        )
+
+        subcat_filter_opts = [ft.dropdown.Option("ALL", "All Subcategories")]
+        subcategory_filter = ft.Dropdown(
+            label="Subcategory",
+            options=subcat_filter_opts,
+            value="ALL",
+            dense=True,
+            width=160
+        )
+
+        complaints_container = ft.Column(spacing=8)
+
+        def update_subcat_options():
+            c_val = category_filter.value or "ALL"
+            new_opts = [ft.dropdown.Option("ALL", "All Subcategories")]
+            if c_val != "ALL":
+                subs = []
+                key = c_val.strip().lower()
+                if key in self.subcategories_by_cat:
+                    subs = self.subcategories_by_cat[key]
+                elif c_val in BASELINE_SUBCATEGORIES:
+                    subs = [{"name": s} for s in BASELINE_SUBCATEGORIES[c_val]]
+                for s in subs:
+                    s_name = s.get("name") if isinstance(s, dict) else str(s)
+                    new_opts.append(ft.dropdown.Option(s_name, s_name))
+            subcategory_filter.options = new_opts
+            subcategory_filter.value = "ALL"
+            self.page.update()
+
+        def load_data(force: bool = False):
+            if force or self.cached_complaints is None:
+                self.cached_complaints = ComplaintService.get_complaints_for_user(
+                    role="Student",
+                    user_id=self.student_id,
+                    department_id=self.department_id
+                )
+            return self.cached_complaints
+
+        def reset_filters(e=None):
+            search_field.value = ""
+            status_filter.value = "ALL"
+            priority_filter.value = "ALL"
+            category_filter.value = "ALL"
+            subcategory_filter.options = [ft.dropdown.Option("ALL", "All Subcategories")]
+            subcategory_filter.value = "ALL"
+            refresh_list(force_reload=False)
+
+        def refresh_list(force_reload: bool = False):
+            complaints = load_data(force=force_reload)
+            query = (search_field.value or "").strip().lower()
+            st_val = (status_filter.value or "ALL").strip()
+            pr_val = (priority_filter.value or "ALL").strip()
+            cat_val = (category_filter.value or "ALL").strip()
+            sub_val = (subcategory_filter.value or "ALL").strip()
+
+            filtered = []
+            for c in complaints:
+                cid_str = str(c.get("complaint_id", ""))
+                title = (c.get("title") or "").lower()
+                desc = (c.get("description") or "").lower()
+                c_st = (c.get("status") or "").strip()
+                c_pr = (c.get("priority") or "").strip()
+
+                cat_obj = c.get("categories")
+                c_cat = cat_obj.get("name") if isinstance(cat_obj, dict) else (c.get("category_name") or c.get("category_custom") or "")
+                sub_obj = c.get("subcategories")
+                c_sub = sub_obj.get("name") if isinstance(sub_obj, dict) else (c.get("subcategory_name") or c.get("subcategory_custom") or "")
+
+                if query and (query not in cid_str and query not in title and query not in desc):
+                    continue
+                if st_val != "ALL" and c_st.lower() != st_val.lower():
+                    continue
+                if pr_val != "ALL" and c_pr.lower() != pr_val.lower():
+                    continue
+                if cat_val != "ALL" and str(c_cat).strip().lower() != cat_val.lower():
+                    continue
+                if sub_val != "ALL" and str(c_sub).strip().lower() != sub_val.lower():
+                    continue
+                filtered.append(c)
+
+            cards = [create_complaint_card(c, self._open_detail_dialog) for c in filtered]
+            if not cards:
+                cards.append(
+                    ft.Container(
+                        content=ft.Column(
+                            controls=[
+                                ft.Icon(ft.Icons.SEARCH_OFF, size=36, color=colors["text_muted"]),
+                                ft.Text("No grievances found matching your search or filter criteria.", size=14, color=colors["text_muted"]),
+                                ft.ElevatedButton("Reset Filters", icon=ft.Icons.CLEAR_ALL, on_click=reset_filters)
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=10
+                        ),
+                        alignment=ft.Alignment.CENTER,
+                        padding=40
+                    )
+                )
+
+            complaints_container.controls = cards
+            self.page.update()
+
+        def on_cat_filter_change(e):
+            update_subcat_options()
+            refresh_list(force_reload=False)
+
+        search_field.on_change = lambda _: refresh_list(force_reload=False)
+        status_filter.on_select = lambda _: refresh_list(force_reload=False)
+        status_filter.on_change = lambda _: refresh_list(force_reload=False)
+        priority_filter.on_select = lambda _: refresh_list(force_reload=False)
+        priority_filter.on_change = lambda _: refresh_list(force_reload=False)
+        category_filter.on_select = on_cat_filter_change
+        category_filter.on_change = on_cat_filter_change
+        subcategory_filter.on_select = lambda _: refresh_list(force_reload=False)
+        subcategory_filter.on_change = lambda _: refresh_list(force_reload=False)
+
+        refresh_list(force_reload=False)
+
+        return ft.Column(
+            controls=[
+                ft.Row(
+                    controls=[
+                        ft.Text("My Complaints", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                        ft.Row(
+                            controls=[
+                                ft.IconButton(
+                                    icon=ft.Icons.REFRESH,
+                                    tooltip="Refresh from Server",
+                                    on_click=lambda _: refresh_list(force_reload=True)
+                                ),
+                                ft.ElevatedButton(
+                                    content=ft.Text("Submit New"),
+                                    icon=ft.Icons.ADD,
+                                    style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
+                                    on_click=lambda _: self._switch_view(1)
+                                )
+                            ],
+                            spacing=8
+                        )
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    wrap=True
+                ),
+                ft.ResponsiveRow(
+                    controls=[
+                        ft.Container(search_field, col={"xs": 12, "md": 4}),
+                        ft.Container(status_filter, col={"xs": 6, "sm": 3, "md": 2}),
+                        ft.Container(priority_filter, col={"xs": 6, "sm": 3, "md": 2}),
+                        ft.Container(category_filter, col={"xs": 6, "sm": 3, "md": 2}),
+                        ft.Container(subcategory_filter, col={"xs": 6, "sm": 3, "md": 2}),
+                    ],
+                    spacing=8,
+                    run_spacing=8
+                ),
+                ft.Divider(color=colors["border"]),
+                complaints_container
+            ],
+            scroll=ft.ScrollMode.AUTO,
+            spacing=14,
+            expand=True
+        )
+
+    # -------------------------------------------------------------------------
+    # TAB 3: FEEDBACK
+    # -------------------------------------------------------------------------
+    def _render_feedback(self) -> ft.Control:
+        is_dark = AppState.is_dark_mode
+        colors = get_theme_colors(is_dark)
+
+        if self.cached_complaints is None:
+            self.cached_complaints = ComplaintService.get_complaints_for_user(
+                role="Student",
+                user_id=self.student_id,
+                department_id=self.department_id
+            )
+        complaints = [c for c in (self.cached_complaints or []) if c.get("status") == "Resolved"]
+
+        feedback_cards = []
+        for c in complaints:
+            cid = c.get("complaint_id")
+            title = c.get("title")
+
+            def open_feedback_dialog(e, comp_id=cid, c_title=title):
+                st_id_field = ft.TextField(label="Confirm Student Roll Number", value=self.roll_number, disabled=True, dense=True)
+                st_pass_field = ft.TextField(label="Enter Account Password", password=True, can_reveal_password=True, dense=True)
+                rating_slider = ft.Slider(min=1, max=5, divisions=4, value=5, label="{value} Stars")
+                rating_text = ft.Text("Rating: 5 / 5 Stars", weight=ft.FontWeight.BOLD, color=colors["text"])
+                comment_field = ft.TextField(label="Comments (Optional)", multiline=True, dense=True)
+
+                submit_fb_btn = ft.ElevatedButton(
+                    content=ft.Text("Submit Rating"),
+                    style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+                )
+
+                def on_slider_change(ev):
+                    rating_text.value = f"Rating: {int(rating_slider.value)} / 5 Stars"
+                    self.page.update()
+
+                rating_slider.on_change = on_slider_change
+
+                def do_submit_feedback(ev):
+                    submit_fb_btn.disabled = True
+                    submit_fb_btn.content = ft.Text("Submitting...")
+                    self.page.update()
+
+                    ok, msg, fb = FeedbackService.submit_feedback(
+                        student_id=self.student_id,
+                        roll_number=self.roll_number,
+                        password=st_pass_field.value or "",
+                        complaint_id=comp_id,
+                        rating=int(rating_slider.value),
+                        comment=comment_field.value
+                    )
+
+                    submit_fb_btn.disabled = False
+                    submit_fb_btn.content = ft.Text("Submit Rating")
+
+                    if ok:
+                        show_feedback_message(self.page, msg, is_error=False)
+                        close_dialog(self.page, dlg)
+                        self._switch_view(3)
+                    else:
+                        show_feedback_message(self.page, msg, is_error=True)
+                        self.page.update()
+
+                submit_fb_btn.on_click = do_submit_feedback
+
+                dlg = ft.AlertDialog(
+                    title=ft.Text(f"Provide Feedback on #{comp_id}", weight=ft.FontWeight.BOLD, color=colors["text"]),
+                    content=ft.Container(
+                        content=ft.Column(
+                            controls=[
+                                ft.Text(f"Issue: {c_title}", size=13, color=colors["text_muted"]),
+                                st_id_field,
+                                st_pass_field,
+                                rating_text,
+                                rating_slider,
+                                comment_field
+                            ],
+                            spacing=10
+                        ),
+                        width=460,
+                        height=320
+                    ),
+                    bgcolor=colors["surface"],
+                    actions=[
+                        ft.TextButton("Cancel", on_click=lambda _: close_dialog(self.page, dlg)),
+                        submit_fb_btn
+                    ]
+                )
+                open_dialog(self.page, dlg)
+
+            feedback_cards.append(
+                ft.Container(
+                    content=ft.Row(
+                        controls=[
+                            ft.Column(
+                                controls=[
+                                    ft.Text(f"Complaint #{cid}: {title}", size=15, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                                    ft.Text("Status: Resolved", size=12, color="#059669")
+                                ],
+                                expand=True
+                            ),
+                            ft.ElevatedButton(
+                                content=ft.Text("Give Feedback"),
+                                icon=ft.Icons.STAR_RATE,
+                                style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
+                                on_click=open_feedback_dialog
+                            )
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True
+                    ),
+                    bgcolor=colors["surface"],
+                    border=ft.Border.all(1, colors["border"]),
+                    border_radius=10,
+                    padding=16,
+                    margin=ft.margin.only(bottom=8)
+                )
+            )
+
+        if not feedback_cards:
+            feedback_cards.append(
+                ft.Container(
+                    content=ft.Text("No resolved complaints waiting for feedback.", size=14, color=colors["text_muted"]),
+                    padding=40
+                )
+            )
+
+        return ft.Column(
+            controls=[
+                ft.Text("Resolution Feedback & Quality Rating", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                ft.Text("Feedback can only be submitted for Resolved grievances.", size=13, color=colors["text_muted"]),
+                ft.Column(controls=feedback_cards, spacing=8)
+            ],
+            scroll=ft.ScrollMode.AUTO,
+            spacing=14,
+            expand=True
+        )
+
+    # -------------------------------------------------------------------------
+    # TAB 4: HOSTEL STATUS & RE-REQUEST
+    # -------------------------------------------------------------------------
+    def _render_hostel_status(self) -> ft.Control:
+        is_dark = AppState.is_dark_mode
+        colors = get_theme_colors(is_dark)
+
+        req = HostelService.get_student_hostel_request(self.student_id)
+
+        if not req:
+            return ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Text("Hostel Access Status", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                        ft.Text("You have not requested hostel accommodation yet.", size=14, color=colors["text_muted"]),
+                        ft.ElevatedButton(
+                            content=ft.Text("Request Hostel Access"),
+                            icon=ft.Icons.HOTEL,
+                            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
+                            on_click=self._open_hostel_request_modal
+                        )
+                    ],
+                    spacing=16
+                ),
+                padding=24
+            )
+
+        status = req.get("status", "Pending")
+        status_color = "#d97706" if status == "Pending" else ("#059669" if status == "Approved" else "#dc2626")
+
+        rows = [
+            ft.Text("Hostel Access Status", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+            ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Text("Status:", size=14, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                        ft.Container(
+                            content=ft.Text(status, size=13, weight=ft.FontWeight.BOLD, color=status_color),
+                            bgcolor=ft.Colors.with_opacity(0.12, status_color),
+                            border_radius=8,
+                            padding=ft.padding.symmetric(horizontal=10, vertical=4)
+                        )
+                    ],
+                    spacing=8
+                )
+            ),
+            ft.Text(f"Hostel: {req.get('hostel_name')} | Block: {req.get('block')} | Room: {req.get('room_number')}", size=14, color=colors["text"])
+        ]
+
+        if status == "Denied":
+            rows.append(
+                ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            ft.Text("Denial Reason from Hostel Incharge:", weight=ft.FontWeight.BOLD, color="#dc2626", size=13),
+                            ft.Text(req.get("deny_reason", "No reason specified"), size=13, color="#991b1b")
+                        ]
+                    ),
+                    bgcolor="#450a0a" if is_dark else "#fef2f2",
+                    border=ft.Border.all(1, "#991b1b" if is_dark else "#fecaca"),
+                    border_radius=8,
+                    padding=12
+                )
+            )
+            rows.append(
+                ft.ElevatedButton(
+                    content=ft.Text("Submit New Request"),
+                    icon=ft.Icons.REFRESH,
+                    style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
+                    on_click=self._open_hostel_request_modal
+                )
+            )
+
+        return ft.Container(
+            content=ft.Column(controls=rows, spacing=14),
+            bgcolor=colors["surface"],
+            border=ft.Border.all(1, colors["border"]),
+            border_radius=14,
+            padding=24,
+            expand=True
+        )
+
+    def _open_hostel_request_modal(self, e):
+        is_dark = AppState.is_dark_mode
+        colors = get_theme_colors(is_dark)
+
+        h_name = ft.TextField(label="Hostel Name", value="Boys Hostel Block A", dense=True)
+        h_block = ft.TextField(label="Block", value="A", dense=True)
+        h_room = ft.TextField(label="Room Number", value="101", dense=True)
+
+        submit_req_btn = ft.ElevatedButton(
+            content=ft.Text("Submit Request"),
+            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+        )
+
+        def do_req(ev):
+            submit_req_btn.disabled = True
+            submit_req_btn.content = ft.Text("Submitting...")
+            self.page.update()
+
+            ok, msg, req = HostelService.submit_hostel_request(
+                student_id=self.student_id,
+                hostel_name=h_name.value or "",
+                block=h_block.value or "",
+                room_number=h_room.value or ""
+            )
+
+            submit_req_btn.disabled = False
+            submit_req_btn.content = ft.Text("Submit Request")
+
+            if ok:
+                show_feedback_message(self.page, msg, is_error=False)
+                close_dialog(self.page, dlg)
+                self._switch_view(4)
+            else:
+                show_feedback_message(self.page, msg, is_error=True)
+                self.page.update()
+
+        submit_req_btn.on_click = do_req
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("Hostel Accommodation Request", weight=ft.FontWeight.BOLD, color=colors["text"]),
+            content=ft.Container(
+                content=ft.Column(controls=[h_name, h_block, h_room], spacing=10),
+                width=400,
+                height=200
+            ),
+            bgcolor=colors["surface"],
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: close_dialog(self.page, dlg)),
+                submit_req_btn
+            ]
+        )
+        open_dialog(self.page, dlg)
+
+    def _open_detail_dialog(self, complaint: Dict[str, Any]):
+        def on_updated():
+            self.cached_complaints = None
+            self._switch_view(self.selected_tab_index)
+
+        show_complaint_detail_dialog(
+            page=self.page,
+            complaint=complaint,
+            current_role="Student",
+            current_user_id=self.student_id,
+            current_dept_id=self.department_id,
+            on_updated=on_updated
+        )
