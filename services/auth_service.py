@@ -266,9 +266,10 @@ class AuthService:
         Verifies the security answer, updates password, and unlocks locked account.
         """
         clean_roll = (roll_number or "").strip().upper()
-        pw_ok, pw_err = validate_password_strength(new_password)
-        if not pw_ok:
-            return False, pw_err
+        if not clean_roll:
+            return False, "Roll Number is required."
+        if not (security_answer or "").strip():
+            return False, "Security answer is required."
 
         client = get_trusted_backend_client()
         try:
@@ -283,6 +284,10 @@ class AuthService:
         student = res.data[0]
         if not verify_security_answer(security_answer, student.get("security_answer_hash", "")):
             return False, "Incorrect security answer."
+
+        pw_ok, pw_err = validate_password_strength(new_password)
+        if not pw_ok:
+            return False, pw_err
 
         # Update password and unlock
         try:

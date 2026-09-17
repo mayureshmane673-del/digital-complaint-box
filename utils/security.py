@@ -9,32 +9,51 @@ import hashlib
 import bcrypt
 from typing import Optional
 
-PEPPER = os.getenv("APP_SECRET_KEY", "college-complaint-box-production-secure-key-2026").encode("utf-8")
+def get_pepper() -> bytes:
+    """Returns the HMAC-SHA256 pepper from APP_SECRET_KEY environment variable."""
+    return os.getenv("APP_SECRET_KEY", "").encode("utf-8")
 
 
 def hash_password(password: str) -> str:
-    """Hashes a password using bcrypt with a secure salt."""
+    """Hashes a password using bcrypt with a secure salt, applying HMAC pepper if configured."""
     if not password:
         raise ValueError("Password cannot be empty")
-    # Apply HMAC pepper before bcrypt to mitigate length limitations and rainbow attacks
-    prep = hmac.new(PEPPER, password.encode("utf-8"), hashlib.sha256).digest()
+    pw_bytes = password.encode("utf-8")
+    pepper = get_pepper()
+    if pepper:
+        prep = hmac.new(pepper, pw_bytes, hashlib.sha256).digest()
+    else:
+        prep = pw_bytes
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(prep, salt).decode("utf-8")
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    """Verifies a plaintext password against a bcrypt hash, supporting both peppered and seed hashes."""
+    """
+    Verifies a plaintext password against a bcrypt hash.
+    Supports:
+    1. HMAC-SHA256 peppered bcrypt (using APP_SECRET_KEY from environment)
+    2. Raw unpeppered bcrypt hashes (for initial database seeds)
+    """
     if not password or not hashed:
         return False
-    try:
-        prep = hmac.new(PEPPER, password.encode("utf-8"), hashlib.sha256).digest()
-        if bcrypt.checkpw(prep, hashed.encode("utf-8")):
-            return True
-    except Exception:
-        pass
 
+    pw_bytes = password.encode("utf-8")
+    hash_bytes = hashed.encode("utf-8")
+    pepper = get_pepper()
+
+    # 1. Verify with environment pepper if configured
+    if pepper:
+        try:
+            prep = hmac.new(pepper, pw_bytes, hashlib.sha256).digest()
+            if bcrypt.checkpw(prep, hash_bytes):
+                return True
+        except Exception:
+            pass
+
+    # 2. Verify with raw unpeppered bcrypt for initial DB seed hashes
     try:
-        if bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8")):
+        if bcrypt.checkpw(pw_bytes, hash_bytes):
             return True
     except Exception:
         pass
@@ -76,7 +95,7 @@ def generate_anonymous_token(student_id: str, complaint_title: str) -> str:
     while being cryptographically irreversible and opaque to staff.
     """
     msg = f"{student_id}:{complaint_title}".encode("utf-8")
-    return hmac.new(PEPPER, msg, hashlib.sha256).hexdigest()
+    return hmac.new(get_pepper(), msg, hashlib.sha256).hexdigest()
 
 
 def sanitize_user_dict(user: Optional[dict]) -> Optional[dict]:

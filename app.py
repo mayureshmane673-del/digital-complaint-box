@@ -12,6 +12,10 @@ ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+# Load environment variables early before initializing services
+from dotenv import load_dotenv
+load_dotenv(ROOT_DIR / ".env")
+
 import flet as ft
 import ui.flet_compat  # Initialize Flet 0.86+ backward compatibility shim
 from ui.theme import create_app_theme, COLOR_BG, COLOR_BG_DARK, get_theme_colors, COLOR_PRIMARY
@@ -214,6 +218,114 @@ app = ft.run(main=main, export_asgi_app=True)
 import flet.app as _flet_app_module
 ft.app = _flet_app_module.app
 
+
+# =============================================================================
+# Production Diagnostics & Verification Endpoints (Safe - Zero Secrets Logged)
+# =============================================================================
+@app.get("/api/health")
+def api_health():
+    import os
+    from urllib.parse import urlparse
+    sb_url = os.getenv("SUPABASE_URL", "")
+    sb_host = urlparse(sb_url).netloc if sb_url else ""
+    return {
+        "status": "healthy",
+        "version": "v1.0.3-render-auth-live",
+        "supabase_hostname": sb_host,
+        "env_configured": {
+            "SUPABASE_URL": bool(sb_url),
+            "SUPABASE_SERVICE_ROLE_KEY": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
+            "APP_SECRET_KEY": bool(os.getenv("APP_SECRET_KEY")),
+            "APP_ENV": os.getenv("APP_ENV", "production"),
+        },
+    }
+
+
+@app.get("/api/diagnostics/auth-check")
+def api_auth_check():
+    """
+    Safely tests live production authentication paths within the deployed container.
+    Returns only pass/fail booleans, role names, and user-facing messages.
+    NEVER logs or returns secret keys, passwords, or hashes.
+    """
+    import os
+    from urllib.parse import urlparse
+    from services.auth_service import AuthService
+    from services.security_code_service import SecurityCodeService
+    from database.supabase_client import get_trusted_backend_client
+    from utils.security import verify_security_answer
+
+    sb_url = os.getenv("SUPABASE_URL", "")
+    sb_host = urlparse(sb_url).netloc if sb_url else ""
+    client = get_trusted_backend_client()
+
+    report = {
+        "version": "v1.0.3-render-auth-live",
+        "supabase_hostname": sb_host,
+        "env_status": {
+            "SUPABASE_URL_SET": bool(sb_url),
+            "SUPABASE_SERVICE_ROLE_KEY_SET": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
+            "APP_SECRET_KEY_SET": bool(os.getenv("APP_SECRET_KEY")),
+            "APP_ENV": os.getenv("APP_ENV", "production"),
+        },
+    }
+
+    # 1. Staff Authentication Test Matrix
+    staff_results = {}
+    staff_tests = [
+        ("Principal", "xyz", "Pass@123", "Pass@123", None),
+        ("Hostel Incharge", "Hostel", "Pass@123", "Pass@123", None),
+        ("Coordinator", "msm", "Pass@123", "Pass@123", "f4e141ef-14ca-44e4-a1ed-051ee0525419"),
+        ("HOD", "mm", "Pass@123", "Pass@123", "f4e141ef-14ca-44e4-a1ed-051ee0525419"),
+        ("Library Incharge", "Library", "Pass@123", "Pass@123", None),
+    ]
+    for role, user, pw, code, dept in staff_tests:
+        ok, msg, u = AuthService.login_staff(role, user, pw, code, dept)
+        staff_results[role] = {"success": ok, "message": msg}
+    report["staff_logins"] = staff_results
+
+    # 2. Staff Security Code Checks
+    gen_dept = SecurityCodeService._get_special_dept_id("GEN")
+    code_results = {
+        "Principal": SecurityCodeService.verify_role_code("Principal", None, "Pass@123"),
+        "Hostel Incharge": SecurityCodeService.verify_role_code("Hostel Incharge", None, "Pass@123"),
+        "Coordinator (CSE)": SecurityCodeService.verify_role_code("Coordinator", "f4e141ef-14ca-44e4-a1ed-051ee0525419", "Pass@123"),
+        "HOD (CSE)": SecurityCodeService.verify_role_code("HOD", "f4e141ef-14ca-44e4-a1ed-051ee0525419", "Pass@123"),
+        "General Department HOD": SecurityCodeService.verify_role_code("General Department HOD", gen_dept, "Pass@123") or SecurityCodeService.verify_role_code("HOD", gen_dept, "Pass@123"),
+        "Library Incharge": SecurityCodeService.verify_role_code("Library Incharge", None, "Pass@123"),
+    }
+    report["security_codes"] = code_results
+
+    # 3. Student Forgot Password Question & Answer Verification
+    ok_q, msg_q, question = AuthService.get_student_security_question("240101030")
+    report["student_forgot_password"] = {
+        "question_retrieved": ok_q,
+        "has_question": bool(question),
+    }
+
+    # Verify security answer YHK directly against student hash
+    try:
+        s_res = client.table("students").select("security_answer_hash").eq("roll_number", "240101030").execute()
+        if s_res.data:
+            sa_hash = s_res.data[0].get("security_answer_hash", "")
+            report["student_forgot_password"]["answer_yhk_exact"] = verify_security_answer("YHK", sa_hash)
+            report["student_forgot_password"]["answer_yhk_lower"] = verify_security_answer("yhk", sa_hash)
+            report["student_forgot_password"]["answer_yhk_spaces"] = verify_security_answer(" YHK ", sa_hash)
+    except Exception as ex:
+        report["student_forgot_password"]["error"] = str(type(ex).__name__)
+
+    # 4. Student Login (240101030)
+    ok_stu, msg_stu, _ = AuthService.login_student("240101030", "Pass@123")
+    report["student_login"] = {"success": ok_stu, "message": msg_stu}
+
+    return report
+
+
+# Ensure API diagnostic routes take precedence over the Flet SPA catch-all mount
+for _ in range(2):
+    app.routes.insert(0, app.routes.pop())
+
+
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8550))
@@ -223,4 +335,5 @@ if __name__ == "__main__":
         uvicorn.run(app, host=host, port=port)
     else:
         ft.run(main=main)
+
 
