@@ -230,7 +230,7 @@ def api_health():
     sb_host = urlparse(sb_url).netloc if sb_url else ""
     return {
         "status": "healthy",
-        "version": "v1.0.3-render-auth-live",
+        "version": "v1.0.4-subcategories-live",
         "supabase_hostname": sb_host,
         "env_configured": {
             "SUPABASE_URL": bool(sb_url),
@@ -238,6 +238,45 @@ def api_health():
             "APP_SECRET_KEY": bool(os.getenv("APP_SECRET_KEY")),
             "APP_ENV": os.getenv("APP_ENV", "production"),
         },
+    }
+
+
+@app.get("/api/diagnostics/subcategories")
+def api_diagnostics_subcategories():
+    """
+    Safely verifies category and subcategory dynamic loading in live production.
+    """
+    from services.cache_service import CacheService
+    cats, subs, locs = CacheService.get_categories_and_subcategories()
+
+    test_cats = ["Electricity", "Hostel", "IT & Computer", "Security & Safety"]
+    test_results = {}
+
+    for t_cat in test_cats:
+        cid = None
+        for c in cats:
+            if c.get("name", "").strip().lower() == t_cat.lower():
+                cid = str(c.get("id"))
+                break
+
+        cat_subs = []
+        if cid and cid in subs:
+            cat_subs = [s.get("name") for s in subs[cid]]
+        elif t_cat.lower() in subs:
+            cat_subs = [s.get("name") for s in subs[t_cat.lower()]]
+
+        test_results[t_cat] = {
+            "category_id": cid,
+            "count": len(cat_subs),
+            "subcategories": cat_subs
+        }
+
+    return {
+        "status": "ok",
+        "version": "v1.0.4-subcategories-live",
+        "total_categories": len(cats),
+        "total_locations": len(locs),
+        "test_categories": test_results
     }
 
 
@@ -260,7 +299,7 @@ def api_auth_check():
     client = get_trusted_backend_client()
 
     report = {
-        "version": "v1.0.3-render-auth-live",
+        "version": "v1.0.4-subcategories-live",
         "supabase_hostname": sb_host,
         "env_status": {
             "SUPABASE_URL_SET": bool(sb_url),
@@ -322,8 +361,9 @@ def api_auth_check():
 
 
 # Ensure API diagnostic routes take precedence over the Flet SPA catch-all mount
-for _ in range(2):
-    app.routes.insert(0, app.routes.pop())
+api_routes = [r for r in app.routes if getattr(r, "path", "").startswith("/api")]
+non_api_routes = [r for r in app.routes if not getattr(r, "path", "").startswith("/api")]
+app.router.routes = api_routes + non_api_routes
 
 
 if __name__ == "__main__":

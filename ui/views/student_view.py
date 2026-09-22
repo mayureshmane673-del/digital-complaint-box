@@ -302,7 +302,7 @@ class StudentView:
         )
         self.subcategory_dropdown.on_select = on_subcat_change
         self.subcategory_dropdown.on_change = on_subcat_change
-        self.subcat_holder = subcat_holder = ft.Container(content=subcategory_dropdown, expand=True)
+        self.subcat_holder = subcat_holder = ft.Container(content=subcategory_dropdown, col={"xs": 12, "sm": 6})
 
         def on_cat_change(e):
             raw_cat = getattr(e, "data", None) or getattr(e.control, "value", None) or (self.category_dropdown.value if hasattr(self, "category_dropdown") else None)
@@ -311,7 +311,10 @@ class StudentView:
             cat_id = raw_cat
             cat_name = ""
             for c in self.categories:
-                if str(c.get("id")) == str(cat_id) or str(c.get("name")) == str(cat_id):
+                c_id_str = str(c.get("id", "")).strip().lower()
+                c_name_str = str(c.get("name", "")).strip().lower()
+                raw_str = str(raw_cat or "").strip().lower()
+                if c_id_str == raw_str or c_name_str == raw_str:
                     cat_name = str(c.get("name", ""))
                     cat_id = str(c.get("id"))
                     break
@@ -321,8 +324,11 @@ class StudentView:
                 subs = self.subcategories_by_cat[str(cat_id)]
             elif cat_name and cat_name.strip().lower() in self.subcategories_by_cat:
                 subs = self.subcategories_by_cat[cat_name.strip().lower()]
-            elif cat_name and cat_name in PRACTICAL_SUBCATEGORIES:
-                subs = [{"id": f"sub_{cat_name.lower()}_{s.lower().replace(' ', '_')}", "name": s} for s in PRACTICAL_SUBCATEGORIES[cat_name]]
+            elif cat_name:
+                for pk, p_list in PRACTICAL_SUBCATEGORIES.items():
+                    if pk.strip().lower() == cat_name.strip().lower():
+                        subs = [{"id": f"sub_{pk.lower()}_{s.lower().replace(' ', '_')}", "name": s} for s in p_list]
+                        break
 
             opts = []
             for s in subs:
@@ -332,6 +338,8 @@ class StudentView:
                     opts.append(ft.dropdown.Option(key=sid, text=sname))
 
             lbl = f"Subcategory ({len(opts)} available)" if opts else "Subcategory"
+            print(f"[CATEGORY_CHANGE] raw_cat={raw_cat}, resolved_id={cat_id}, resolved_name='{cat_name}', options_count={len(opts)}")
+
             new_subcat = ft.Dropdown(
                 label=lbl,
                 options=opts,
@@ -358,8 +366,8 @@ class StudentView:
 
             try:
                 self.subcat_holder.update()
-            except Exception:
-                pass
+            except Exception as ex:
+                print(f"[CATEGORY_CHANGE] subcat_holder.update warning: {ex}")
             try:
                 custom_cat_field.update()
             except Exception:
@@ -370,8 +378,8 @@ class StudentView:
                 pass
             try:
                 self.page.update()
-            except Exception:
-                pass
+            except Exception as ex:
+                print(f"[CATEGORY_CHANGE] page.update warning: {ex}")
 
         self.category_dropdown = category_dropdown = ft.Dropdown(
             label="Category",
@@ -614,7 +622,7 @@ class StudentView:
                     ft.ResponsiveRow(
                         controls=[
                             ft.Container(category_dropdown, col={"xs": 12, "sm": 6}),
-                            ft.Container(subcat_holder, col={"xs": 12, "sm": 6})
+                            self.subcat_holder
                         ]
                     ),
                     custom_cat_field,
