@@ -37,6 +37,8 @@ def create_complaint_card(
     status_color = STATUS_COLORS.get(status, "#6b7280")
     priority_color = PRIORITY_COLORS.get(priority, "#6b7280")
 
+    sub_name = complaint.get("subcategories", {}).get("name") if isinstance(complaint.get("subcategories"), dict) else (complaint.get("subcategory_name") or complaint.get("subcategory_custom") or "")
+
     # Header tags
     header_chips = [
         ft.Container(
@@ -51,6 +53,19 @@ def create_complaint_card(
             border_radius=8,
             padding=ft.padding.symmetric(horizontal=8, vertical=4)
         ),
+    ]
+
+    if sub_name and str(sub_name).lower() not in ("none", "null", ""):
+        header_chips.append(
+            ft.Container(
+                content=ft.Text(str(sub_name), size=11, weight=ft.FontWeight.W_500, color=colors["primary"]),
+                bgcolor=ft.Colors.with_opacity(0.08, colors["primary"]),
+                border_radius=8,
+                padding=ft.padding.symmetric(horizontal=8, vertical=4)
+            )
+        )
+
+    header_chips.append(
         ft.Container(
             content=ft.Row(
                 controls=[
@@ -60,7 +75,7 @@ def create_complaint_card(
                 spacing=2
             )
         )
-    ]
+    )
 
     if is_hostel:
         header_chips.append(

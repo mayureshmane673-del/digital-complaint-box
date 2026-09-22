@@ -106,7 +106,7 @@ class CacheService:
             if cls._categories is not None and cls._subcategories_by_cat is not None and cls._locations is not None and not force_refresh:
                 return cls._categories, cls._subcategories_by_cat, cls._locations
 
-            from ui.views.student_view import BASELINE_SUBCATEGORIES
+            from models.complaint import PRACTICAL_SUBCATEGORIES, get_default_priority
             from database.supabase_client import get_trusted_backend_client, get_supabase_client
             client = get_trusted_backend_client() or get_supabase_client()
 
@@ -118,7 +118,7 @@ class CacheService:
                 categories = []
 
             if not categories:
-                categories = [{"id": name.lower().replace(" ", "_"), "name": name} for name in BASELINE_SUBCATEGORIES.keys()]
+                categories = [{"id": name.lower().replace(" ", "_"), "name": name} for name in PRACTICAL_SUBCATEGORIES.keys()]
 
             # 2. Locations
             try:
@@ -127,30 +127,51 @@ class CacheService:
             except Exception:
                 locations = []
 
-            # 3. Subcategories
+            # 3. Subcategories from DB (active only)
             try:
-                sub_res = client.table("subcategories").select("id, name, category_id").execute()
+                sub_res = client.table("subcategories").select("id, name, category_id").eq("is_active", True).execute()
                 all_subs = sub_res.data or []
             except Exception:
                 all_subs = []
 
-            sub_map = defaultdict(list)
-            for s in all_subs:
-                sub_map[str(s.get("category_id"))].append(s)
-
             cat_id_to_name = {str(c["id"]): c["name"] for c in categories}
+            cat_name_to_id = {c["name"].strip().lower(): str(c["id"]) for c in categories}
+
+            # Group DB subcategories by normalized category name
+            db_subs_by_catname = defaultdict(dict)
             for s in all_subs:
                 cid = str(s.get("category_id"))
                 cname = cat_id_to_name.get(cid)
                 if cname:
-                    sub_map[cname.strip().lower()].append(s)
+                    sname = str(s.get("name", "")).strip()
+                    db_subs_by_catname[cname.strip().lower()][sname.lower()] = s
 
-            for cat_name, sub_names in BASELINE_SUBCATEGORIES.items():
-                key = cat_name.strip().lower()
-                if not sub_map[key]:
-                    for sn in sub_names:
-                        item = {"id": f"base_{key}_{sn.lower()}", "name": sn, "category_id": key}
-                        sub_map[key].append(item)
+            sub_map = defaultdict(list)
+
+            # Build canonical practical subcategories for each category in required order
+            for cat_name, practical_sub_list in PRACTICAL_SUBCATEGORIES.items():
+                cat_key = cat_name.strip().lower()
+                cid = cat_name_to_id.get(cat_key, cat_key)
+                canonical_items = []
+
+                for sname in practical_sub_list:
+                    s_lower = sname.strip().lower()
+                    if s_lower in db_subs_by_catname[cat_key]:
+                        rec = db_subs_by_catname[cat_key][s_lower]
+                        sub_id = str(rec.get("id"))
+                    else:
+                        sub_id = f"sub_{cat_key}_{s_lower.replace(' ', '_').replace('/', '_')}"
+
+                    item = {
+                        "id": sub_id,
+                        "name": sname,
+                        "category_id": cid,
+                        "default_priority": get_default_priority(cat_name, sname)
+                    }
+                    canonical_items.append(item)
+
+                sub_map[cid] = canonical_items
+                sub_map[cat_key] = canonical_items
 
             cls._categories = categories
             cls._locations = locations

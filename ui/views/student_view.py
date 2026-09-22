@@ -30,79 +30,14 @@ from ui.components.animated_chart import (
 )
 from utils.validators import validate_description, validate_attachment
 from models.user import UserRole
+from models.complaint import (
+    PRACTICAL_SUBCATEGORIES,
+    PRACTICAL_SUBCATEGORIES_CONFIG,
+    get_default_priority
+)
 
-BASELINE_SUBCATEGORIES = {
-    "Cleaning & Hygiene": [
-        "Classroom Cleaning", "Laboratory Cleaning", "Washroom Cleaning",
-        "Campus Cleaning", "Canteen Hygiene", "Hostel Cleaning",
-        "Dustbins / Waste Disposal", "Pest / Insect Problem", "Other Cleaning Issue"
-    ],
-    "Infrastructure": [
-        "Building Damage", "Classroom Damage", "Laboratory Infrastructure",
-        "Furniture / Desk / Bench", "Door / Window", "Roof / Ceiling",
-        "Flooring", "Fan / Ventilation", "Lift / Accessibility",
-        "Other Infrastructure Issue"
-    ],
-    "Electricity": [
-        "Lights", "Fans", "Power Supply", "Switch / Socket",
-        "Electrical Short Circuit", "Generator / Backup", "Wiring",
-        "Other Electrical Issue"
-    ],
-    "Water & Sanitation": [
-        "Drinking Water", "Water Supply", "Water Leakage", "Drainage",
-        "Washroom Water", "Water Cooler / Filter", "Sewage / Drain Problem",
-        "Other Water / Sanitation Issue"
-    ],
-    "IT & Computer": [
-        "Computer Not Working", "Computer Hardware", "Internet / Wi-Fi",
-        "Network Connectivity", "Printer", "Projector", "Software Problem",
-        "Lab Login / Access", "IT Equipment", "Other IT Issue"
-    ],
-    "Academics": [
-        "Timetable", "Examination", "Practical / Lab", "Assignment",
-        "Syllabus", "Internal Assessment", "Result / Marks",
-        "Academic Schedule", "Classroom Allocation", "Other Academic Issue"
-    ],
-    "Faculty": [
-        "Teaching Quality", "Attendance", "Faculty Availability",
-        "Faculty Behaviour", "Communication", "Academic Guidance",
-        "Doubt / Query Resolution", "Other Faculty Issue"
-    ],
-    "Canteen": [
-        "Food Quality", "Food Hygiene", "Pricing", "Food Availability",
-        "Service", "Seating / Cleanliness", "Water / Beverage",
-        "Other Canteen Issue"
-    ],
-    "Hostel": [
-        "Hostel Room", "Hostel Washroom", "Hostel Food", "Hostel Water",
-        "Hostel Electricity", "Hostel Cleaning", "Hostel Security",
-        "Hostel Furniture", "Hostel Internet", "Room Allocation",
-        "Other Hostel Issue"
-    ],
-    "Transport": [
-        "Bus", "Bus Timing", "Bus Route", "Driver", "Service Quality",
-        "Bus Capacity", "Bus Safety", "Other Transport Issue"
-    ],
-    "Student Related": [
-        "Misconduct", "Ragging / Harassment", "Lost & Found",
-        "Student Discipline", "Student Behaviour", "Academic Misconduct",
-        "ID Card / Student Document", "Other Student Related Issue"
-    ],
-    "Security & Safety": [
-        "Security Staff", "CCTV", "Emergency", "Unsafe Condition",
-        "Fire Safety", "Theft / Security Incident", "Entry / Exit Control",
-        "Other Safety Issue"
-    ],
-    "Library": [
-        "Book Availability", "Book Issue / Return", "Library Membership",
-        "Library Timing", "Seating / Study Area", "Library Cleanliness",
-        "Computer / Digital Library", "Internet / Wi-Fi", "Reference Material",
-        "Lost / Damaged Book", "Library Staff Behaviour", "Other Library Issue"
-    ],
-    "Other": [
-        "General / Other", "Other / Custom Subcategory"
-    ]
-}
+BASELINE_SUBCATEGORIES = PRACTICAL_SUBCATEGORIES
+
 
 
 class StudentView:
@@ -293,62 +228,64 @@ class StudentView:
         desc_field.on_change = on_desc_change
 
         cat_options = [ft.dropdown.Option(key=str(c["id"]), text=str(c["name"])) for c in self.categories]
-        self.category_dropdown = category_dropdown = ft.Dropdown(label="Category", options=cat_options, dense=True, expand=True)
-        custom_cat_field = ft.TextField(label="Specify Custom Category / Subcategory", dense=True, visible=False, expand=True)
+
+        custom_cat_field = ft.TextField(
+            label="Specify Custom Category / Subcategory (Compulsory)",
+            hint_text="Please describe your specific issue in detail...",
+            dense=True,
+            visible=False,
+            expand=True
+        )
+
+        priority_dropdown = ft.Dropdown(
+            label="Priority",
+            options=[
+                ft.dropdown.Option("Low"),
+                ft.dropdown.Option("Medium"),
+                ft.dropdown.Option("High")
+            ],
+            value="Low",
+            dense=True,
+            width=160
+        )
 
         def on_subcat_change(e):
-            val = subcategory_dropdown.value
-            custom_cat_field.visible = (val == "OTHER")
-            self.page.update()
+            selected_sub_key = getattr(e, "data", None) or getattr(e.control, "value", None) or getattr(self.subcategory_dropdown, "value", None)
+            if hasattr(self, "subcategory_dropdown") and self.subcategory_dropdown:
+                self.subcategory_dropdown.value = selected_sub_key
 
-        self.subcategory_dropdown = subcategory_dropdown = ft.Dropdown(
-            label="Subcategory (Select Category First)",
-            options=[ft.dropdown.Option(key="OTHER", text="Other / Custom Subcategory")],
-            dense=True,
-            expand=True,
-            on_change=on_subcat_change
-        )
-        self.subcat_holder = subcat_holder = ft.Container(content=subcategory_dropdown, expand=True)
-
-        def on_cat_change(e):
-            cat_id = category_dropdown.value or (e.control.value if e else None)
+            cat_id = getattr(self.category_dropdown, "value", None)
             cat_name = ""
             for c in self.categories:
                 if str(c.get("id")) == str(cat_id) or str(c.get("name")) == str(cat_id):
                     cat_name = str(c.get("name", ""))
                     break
 
-            subs = []
-            if cat_id and str(cat_id) in self.subcategories_by_cat:
-                subs = self.subcategories_by_cat[str(cat_id)]
-            elif cat_name and cat_name.strip().lower() in self.subcategories_by_cat:
-                subs = self.subcategories_by_cat[cat_name.strip().lower()]
-            elif cat_name and cat_name in BASELINE_SUBCATEGORIES:
-                subs = [{"id": f"base_{s.lower()}", "name": s} for s in BASELINE_SUBCATEGORIES[cat_name]]
+            selected_sub_name = ""
+            if hasattr(self, "subcategory_dropdown") and self.subcategory_dropdown.options:
+                for opt in self.subcategory_dropdown.options:
+                    if str(opt.key) == str(selected_sub_key) or str(opt.text) == str(selected_sub_key):
+                        selected_sub_name = str(opt.text)
+                        break
 
-            seen = set()
-            opts = []
-            for s in subs:
-                sname = str(s.get("name", "")).strip()
-                if sname and sname.lower() not in seen:
-                    seen.add(sname.lower())
-                    opts.append(ft.dropdown.Option(key=str(s["id"]), text=sname))
+            is_other_cat = (cat_name.strip().lower() == "other")
+            is_other_sub = (
+                selected_sub_key == "OTHER" or
+                selected_sub_name.strip().lower() in ["other", "other complaint", "other / custom subcategory"]
+            )
+            custom_cat_field.visible = bool(is_other_cat or is_other_sub)
+            if custom_cat_field.visible:
+                custom_cat_field.label = "Specify Custom Details (Compulsory for Other)"
 
-            opts.append(ft.dropdown.Option(key="OTHER", text="Other / Custom Subcategory"))
-
-            lbl = f"Subcategory ({len(opts)-1} available)" if (len(opts) > 1) else "Subcategory"
-            subcategory_dropdown.label = lbl
-            subcategory_dropdown.options = opts
-            subcategory_dropdown.value = None
-
-            if cat_name.lower() == "other":
-                custom_cat_field.visible = True
-                subcategory_dropdown.value = "OTHER"
-            else:
-                custom_cat_field.visible = False
+            smart_pri = get_default_priority(cat_name, selected_sub_name)
+            priority_dropdown.value = smart_pri
 
             try:
-                subcategory_dropdown.update()
+                priority_dropdown.update()
+            except Exception:
+                pass
+            try:
+                custom_cat_field.update()
             except Exception:
                 pass
             try:
@@ -356,7 +293,95 @@ class StudentView:
             except Exception:
                 pass
 
-        category_dropdown.on_change = on_cat_change
+        self.subcategory_dropdown = subcategory_dropdown = ft.Dropdown(
+            label="Subcategory (Select Category First)",
+            options=[],
+            dense=True,
+            expand=True,
+            on_select=on_subcat_change
+        )
+        self.subcategory_dropdown.on_select = on_subcat_change
+        self.subcategory_dropdown.on_change = on_subcat_change
+        self.subcat_holder = subcat_holder = ft.Container(content=subcategory_dropdown, expand=True)
+
+        def on_cat_change(e):
+            raw_cat = getattr(e, "data", None) or getattr(e.control, "value", None) or (self.category_dropdown.value if hasattr(self, "category_dropdown") else None)
+            if hasattr(self, "category_dropdown") and self.category_dropdown:
+                self.category_dropdown.value = raw_cat
+            cat_id = raw_cat
+            cat_name = ""
+            for c in self.categories:
+                if str(c.get("id")) == str(cat_id) or str(c.get("name")) == str(cat_id):
+                    cat_name = str(c.get("name", ""))
+                    cat_id = str(c.get("id"))
+                    break
+
+            subs = []
+            if cat_id and str(cat_id) in self.subcategories_by_cat:
+                subs = self.subcategories_by_cat[str(cat_id)]
+            elif cat_name and cat_name.strip().lower() in self.subcategories_by_cat:
+                subs = self.subcategories_by_cat[cat_name.strip().lower()]
+            elif cat_name and cat_name in PRACTICAL_SUBCATEGORIES:
+                subs = [{"id": f"sub_{cat_name.lower()}_{s.lower().replace(' ', '_')}", "name": s} for s in PRACTICAL_SUBCATEGORIES[cat_name]]
+
+            opts = []
+            for s in subs:
+                sname = str(s.get("name", "")).strip()
+                sid = str(s.get("id", sname))
+                if sname:
+                    opts.append(ft.dropdown.Option(key=sid, text=sname))
+
+            lbl = f"Subcategory ({len(opts)} available)" if opts else "Subcategory"
+            new_subcat = ft.Dropdown(
+                label=lbl,
+                options=opts,
+                value=None,
+                dense=True,
+                expand=True,
+                on_select=on_subcat_change
+            )
+            new_subcat.on_select = on_subcat_change
+            new_subcat.on_change = on_subcat_change
+
+            self.subcategory_dropdown = new_subcat
+            self.subcat_holder.content = new_subcat
+
+            is_other_cat = (cat_name.strip().lower() == "other")
+            if is_other_cat:
+                custom_cat_field.visible = True
+                custom_cat_field.label = "Specify Custom Details (Compulsory for Other)"
+            else:
+                custom_cat_field.visible = False
+                custom_cat_field.value = ""
+
+            priority_dropdown.value = "Low"
+
+            try:
+                self.subcat_holder.update()
+            except Exception:
+                pass
+            try:
+                custom_cat_field.update()
+            except Exception:
+                pass
+            try:
+                priority_dropdown.update()
+            except Exception:
+                pass
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        self.category_dropdown = category_dropdown = ft.Dropdown(
+            label="Category",
+            options=cat_options,
+            dense=True,
+            expand=True,
+            on_select=on_cat_change
+        )
+        self.category_dropdown.on_select = on_cat_change
+        self.category_dropdown.on_change = on_cat_change
 
         loc_options = [ft.dropdown.Option(l["id"], l["name"]) for l in self.locations]
         loc_options.append(ft.dropdown.Option("OTHER", "Other / Custom Location"))
@@ -369,19 +394,6 @@ class StudentView:
 
         location_dropdown.on_select = on_loc_change
         location_dropdown.on_change = on_loc_change
-
-        priority_dropdown = ft.Dropdown(
-            label="Priority",
-            options=[
-                ft.dropdown.Option("Low"),
-                ft.dropdown.Option("Medium"),
-                ft.dropdown.Option("High"),
-                ft.dropdown.Option("Urgent")
-            ],
-            value="Low",
-            dense=True,
-            width=160
-        )
 
         anonymous_checkbox = ft.Checkbox(
             label="Submit Anonymously (Identity strictly hidden from all staff & administration)",
@@ -488,32 +500,53 @@ class StudentView:
                 show_feedback_message(self.page, err, is_error=True)
                 return
 
-            if not category_dropdown.value:
+            cat_id = category_dropdown.value
+            if not cat_id:
                 show_alert("Please select a Category.", is_error=True)
                 show_feedback_message(self.page, "Please select a Category.", is_error=True)
                 return
+
+            cat_name = ""
+            for c in self.categories:
+                if str(c.get("id")) == str(cat_id) or str(c.get("name")) == str(cat_id):
+                    cat_name = str(c.get("name", ""))
+                    break
 
             subcat_ctrl = getattr(self, "subcategory_dropdown", None) or subcat_holder.content
             selected_subcat = subcat_ctrl.value if subcat_ctrl else None
             custom_cat_val = (custom_cat_field.value or "").strip()
 
-            subcat_id = None
-            subcat_custom_str = None
-            if selected_subcat == "OTHER":
+            selected_sub_name = ""
+            if subcat_ctrl and getattr(subcat_ctrl, "options", None):
+                for opt in subcat_ctrl.options:
+                    if str(opt.key) == str(selected_subcat) or str(opt.text) == str(selected_subcat):
+                        selected_sub_name = str(opt.text)
+                        break
+
+            is_other_cat = (cat_name.strip().lower() == "other")
+            is_other_sub = (
+                selected_subcat == "OTHER" or
+                selected_sub_name.strip().lower() in ["other", "other complaint", "other / custom subcategory"]
+            )
+
+            if not selected_subcat and subcat_ctrl and getattr(subcat_ctrl, "options", None) and not is_other_cat:
+                show_alert("Please select a Subcategory.", is_error=True)
+                show_feedback_message(self.page, "Please select a Subcategory.", is_error=True)
+                return
+
+            if is_other_cat or is_other_sub or custom_cat_field.visible:
                 if not custom_cat_val:
-                    show_alert("Please specify the custom category/subcategory details.", is_error=True)
+                    show_alert("Please specify the custom category/subcategory details (compulsory for Other).", is_error=True)
                     show_feedback_message(self.page, "Please specify the custom category/subcategory details.", is_error=True)
                     return
-                subcat_custom_str = custom_cat_val
-            elif selected_subcat:
-                if len(str(selected_subcat)) == 36 and "-" in str(selected_subcat):
-                    subcat_id = selected_subcat
-                else:
-                    subcat_custom_str = str(selected_subcat)
+
+            subcat_id = None
+            if selected_subcat and len(str(selected_subcat)) == 36 and "-" in str(selected_subcat):
+                subcat_id = selected_subcat
 
             final_desc = desc_field.value or ""
-            if subcat_custom_str:
-                final_desc = f"[Custom Subcategory: {subcat_custom_str}]\n" + final_desc
+            if custom_cat_val:
+                final_desc = f"[Custom Subcategory: {custom_cat_val}]\n" + final_desc
 
             loc_id = location_dropdown.value if location_dropdown.value != "OTHER" else None
             custom_loc = custom_loc_field.value if location_dropdown.value == "OTHER" else None
@@ -535,7 +568,9 @@ class StudentView:
                     priority=priority_dropdown.value or "Low",
                     is_anonymous=anonymous_checkbox.value,
                     is_hostel=hostel_checkbox.value,
-                    location_custom=custom_loc
+                    location_custom=custom_loc,
+                    category_custom=custom_cat_val if is_other_cat else None,
+                    subcategory_custom=custom_cat_val if is_other_sub else None
                 )
 
                 if ok and created_comp:
@@ -680,21 +715,26 @@ class StudentView:
 
         complaints_container = ft.Column(spacing=8)
 
-        def update_subcat_options():
-            c_val = category_filter.value or "ALL"
+        def update_subcat_options(c_val=None):
+            if c_val is None:
+                c_val = category_filter.value or "ALL"
             new_opts = [ft.dropdown.Option("ALL", "All Subcategories")]
             if c_val != "ALL":
                 subs = []
                 key = c_val.strip().lower()
                 if key in self.subcategories_by_cat:
                     subs = self.subcategories_by_cat[key]
-                elif c_val in BASELINE_SUBCATEGORIES:
-                    subs = [{"name": s} for s in BASELINE_SUBCATEGORIES[c_val]]
+                elif c_val in PRACTICAL_SUBCATEGORIES:
+                    subs = [{"name": s} for s in PRACTICAL_SUBCATEGORIES[c_val]]
                 for s in subs:
                     s_name = s.get("name") if isinstance(s, dict) else str(s)
                     new_opts.append(ft.dropdown.Option(s_name, s_name))
             subcategory_filter.options = new_opts
             subcategory_filter.value = "ALL"
+            try:
+                subcategory_filter.update()
+            except Exception:
+                pass
             self.page.update()
 
         def load_data(force: bool = False):
@@ -770,7 +810,9 @@ class StudentView:
             self.page.update()
 
         def on_cat_filter_change(e):
-            update_subcat_options()
+            c_val = getattr(e, "data", None) or getattr(e.control, "value", None) or category_filter.value or "ALL"
+            category_filter.value = c_val
+            update_subcat_options(c_val)
             refresh_list(force_reload=False)
 
         search_field.on_change = lambda _: refresh_list(force_reload=False)

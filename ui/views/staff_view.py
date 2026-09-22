@@ -292,8 +292,9 @@ class StaffView:
 
         complaints_container = ft.Column(spacing=8)
 
-        def update_subcat_options():
-            c_val = category_filter.value or "ALL"
+        def update_subcat_options(c_val=None):
+            if c_val is None:
+                c_val = category_filter.value or "ALL"
             new_opts = [ft.dropdown.Option("ALL", "All Subcategories")]
             if c_val != "ALL":
                 subs = []
@@ -307,6 +308,10 @@ class StaffView:
                     new_opts.append(ft.dropdown.Option(s_name, s_name))
             subcategory_filter.options = new_opts
             subcategory_filter.value = "ALL"
+            try:
+                subcategory_filter.update()
+            except Exception:
+                pass
             self.page.update()
 
         def load_data(force: bool = False):
@@ -408,8 +413,14 @@ class StaffView:
         status_filter.on_change = lambda _: refresh_list(force_reload=False)
         priority_filter.on_select = lambda _: refresh_list(force_reload=False)
         priority_filter.on_change = lambda _: refresh_list(force_reload=False)
-        category_filter.on_select = lambda _: (update_subcat_options(), refresh_list(force_reload=False))
-        category_filter.on_change = lambda _: (update_subcat_options(), refresh_list(force_reload=False))
+        def on_cat_filter_change(e):
+            c_val = getattr(e, "data", None) or getattr(e.control, "value", None) or category_filter.value or "ALL"
+            category_filter.value = c_val
+            update_subcat_options(c_val)
+            refresh_list(force_reload=False)
+
+        category_filter.on_select = on_cat_filter_change
+        category_filter.on_change = on_cat_filter_change
         subcategory_filter.on_select = lambda _: refresh_list(force_reload=False)
         subcategory_filter.on_change = lambda _: refresh_list(force_reload=False)
         if dept_filter:

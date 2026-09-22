@@ -298,6 +298,7 @@ def show_complaint_detail_dialog(
 
     # Metadata chips
     cat_name = complaint.get("categories", {}).get("name") if isinstance(complaint.get("categories"), dict) else (complaint.get("category_name") or "General")
+    sub_name = complaint.get("subcategories", {}).get("name") if isinstance(complaint.get("subcategories"), dict) else (complaint.get("subcategory_name") or complaint.get("subcategory_custom") or "")
     loc_name = complaint.get("locations", {}).get("name") if isinstance(complaint.get("locations"), dict) else (complaint.get("location_custom") or complaint.get("location_name") or "Campus")
     created_at_fmt = format_datetime(complaint.get("created_at"))
 
@@ -314,6 +315,25 @@ def show_complaint_detail_dialog(
             border_radius=8,
             padding=ft.padding.symmetric(horizontal=8, vertical=4)
         ),
+    ]
+
+    if sub_name and str(sub_name).lower() not in ("none", "null", ""):
+        meta_chips.append(
+            ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.SUBDIRECTORY_ARROW_RIGHT, size=12, color=colors["primary"]),
+                        ft.Text(str(sub_name), size=11, weight=ft.FontWeight.W_500, color=colors["text"])
+                    ],
+                    spacing=4
+                ),
+                bgcolor=colors.get("surface_variant", "#f1f5f9"),
+                border_radius=8,
+                padding=ft.padding.symmetric(horizontal=8, vertical=4)
+            )
+        )
+
+    meta_chips.extend([
         ft.Container(
             content=ft.Row(
                 controls=[
@@ -323,7 +343,6 @@ def show_complaint_detail_dialog(
                 spacing=4
             ),
             bgcolor=colors.get("surface_variant", "#f1f5f9"),
-            border_radius=8,
             padding=ft.padding.symmetric(horizontal=8, vertical=4)
         ),
         ft.Container(
@@ -344,7 +363,7 @@ def show_complaint_detail_dialog(
             border_radius=8,
             padding=ft.padding.symmetric(horizontal=8, vertical=4)
         )
-    ]
+    ])
 
     if is_anon:
         meta_chips.append(
