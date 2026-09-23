@@ -56,6 +56,15 @@ def show_excel_importer_dialog(
                 return
 
             f = files[0]
+            if getattr(f, "size", None) and f.size > 5 * 1024 * 1024:
+                selected_file_info[0] = None
+                selected_path.value = "File exceeds 5MB limit. Please upload a smaller spreadsheet."
+                selected_path.italic = False
+                selected_path.color = "#dc2626"
+                import_btn.disabled = True
+                page.update()
+                return
+
             name_lower = f.name.lower()
             if not (name_lower.endswith(".xlsx") or name_lower.endswith(".xls") or name_lower.endswith(".csv")):
                 selected_file_info[0] = None

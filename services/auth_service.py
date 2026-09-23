@@ -184,7 +184,7 @@ class AuthService:
         client = get_trusted_backend_client()
 
         try:
-            res = client.table("students").select("*, departments(code, name)").eq("roll_number", clean_roll).execute()
+            res = client.table("students").select("*").eq("roll_number", clean_roll).limit(1).execute()
         except Exception as ex:
             logger.error("Database error during student login: %s", ex)
             return False, "Invalid Roll Number or Password.", None
@@ -193,6 +193,11 @@ class AuthService:
             return False, "Invalid Roll Number or Password.", None
 
         student = res.data[0]
+        # Attach department from cache without network join
+        from services.cache_service import CacheService
+        dept = CacheService.get_department_by_id(student.get("department_id"))
+        if dept:
+            student["departments"] = {"code": dept.get("code"), "name": dept.get("name")}
 
         # Check account status
         if student.get("is_active") is False:
@@ -489,7 +494,7 @@ class AuthService:
 
             if role == UserRole.GENERAL_HOD.value:
                 # Query by username and General Department
-                res = client.table("staff_users").select("*, departments(code, name)").eq("username", clean_user).execute()
+                res = client.table("staff_users").select("*").eq("username", clean_user).execute()
                 valid_rows = [
                     r for r in (res.data or [])
                     if r.get("role") == "General Department HOD" or (r.get("role") == "HOD" and str(r.get("department_id")) == str(gen_id))
@@ -497,14 +502,14 @@ class AuthService:
                 staff_matches = valid_rows
             elif role == UserRole.LIBRARY_INCHARGE.value:
                 # Query by username and Library Department or Library Incharge role
-                res = client.table("staff_users").select("*, departments(code, name)").eq("username", clean_user).execute()
+                res = client.table("staff_users").select("*").eq("username", clean_user).execute()
                 valid_rows = [
                     r for r in (res.data or [])
                     if r.get("role") == "Library Incharge" or (r.get("role") == "HOD" and str(r.get("department_id")) == str(lib_id))
                 ]
                 staff_matches = valid_rows
             else:
-                res = client.table("staff_users").select("*, departments(code, name)").eq("username", clean_user).eq("role", role).execute()
+                res = client.table("staff_users").select("*").eq("username", clean_user).eq("role", role).execute()
                 staff_matches = res.data or []
 
         except Exception as ex:
@@ -515,6 +520,11 @@ class AuthService:
             return False, "Invalid username, password, or security code.", None
 
         staff = staff_matches[0]
+        # Attach department from cache without network join
+        from services.cache_service import CacheService
+        dept = CacheService.get_department_by_id(staff.get("department_id"))
+        if dept:
+            staff["departments"] = {"code": dept.get("code"), "name": dept.get("name")}
 
         # Check account status
         if not staff.get("is_active"):

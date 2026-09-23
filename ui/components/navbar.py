@@ -23,8 +23,9 @@ def create_app_bar(
     department_id: Optional[str],
     on_logout: Callable[[], None]
 ) -> ft.AppBar:
-    """Creates top application bar with notification bell, dark mode toggle, and profile badge."""
-    unread_count = NotificationService.get_unread_count(user_id, user_role, department_id)
+    from services.cache_service import CacheService
+    cached_unread = CacheService.get_cached_unread_count(user_id, user_role, department_id)
+    unread_count = cached_unread if cached_unread is not None else 0
     is_dark = AppState.is_dark_mode
     colors = get_theme_colors(is_dark)
 
@@ -42,7 +43,22 @@ def create_app_bar(
     def update_badge(count: int):
         badge_text.value = str(count)
         badge_container.visible = count > 0
-        page.update()
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    # If unread count was not in cache, fetch asynchronously without blocking UI render
+    if cached_unread is None:
+        import threading
+        def _fetch_unread_bg():
+            try:
+                count = NotificationService.get_unread_count(user_id, user_role, department_id)
+                if count != unread_count:
+                    update_badge(count)
+            except Exception:
+                pass
+        threading.Thread(target=_fetch_unread_bg, daemon=True).start()
 
     def open_notifications(e):
         show_notification_dialog(page, user_id, user_role, department_id, on_badge_update=update_badge)

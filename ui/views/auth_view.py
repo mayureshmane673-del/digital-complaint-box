@@ -21,13 +21,12 @@ from models.user import UserRole
 
 logger = logging.getLogger("complaint_box.auth_view")
 
-# Standard fallback departments if database not yet migrated
 DEFAULT_DEPTS = [
-    {"code": "CSE", "name": "Computer Science and Engineering"},
-    {"code": "AIDS", "name": "Artificial Intelligence and Data Science"},
-    {"code": "E&TC", "name": "Electronics and Telecommunication Engineering"},
-    {"code": "MECH", "name": "Mechanical Engineering"},
-    {"code": "Civil", "name": "Civil Engineering"}
+    {"id": "f4e141ef-14ca-44e4-a1ed-051ee0525419", "code": "CSE", "name": "Computer Science and Engineering"},
+    {"id": "06059c36-8a03-4f9e-9086-1d116a3bc533", "code": "AIDS", "name": "Artificial Intelligence and Data Science"},
+    {"id": "a90df03a-3243-4ce2-bdf1-3312c5b3d6f1", "code": "E&TC", "name": "Electronics and Telecommunication Engineering"},
+    {"id": "d05fe7ee-bfcf-41c3-8be2-72abcb71b802", "code": "MECH", "name": "Mechanical Engineering"},
+    {"id": "517fc5e3-cf9d-4340-9a4f-a2e6f4770176", "code": "Civil", "name": "Civil Engineering"}
 ]
 
 
@@ -39,7 +38,13 @@ class AuthView:
 
     def _load_departments(self) -> List[Dict[str, Any]]:
         from services.cache_service import CacheService
-        return CacheService.get_departments()
+        with CacheService._lock:
+            if CacheService._departments is not None:
+                return CacheService._departments
+        # Background pre-warm so initial login render has 0ms network latency
+        import threading
+        threading.Thread(target=CacheService.get_departments, daemon=True).start()
+        return DEFAULT_DEPTS
 
     def _make_alert_box(self) -> ft.Container:
         """Creates an in-form visual banner container for instant feedback."""
@@ -682,7 +687,23 @@ class AuthView:
                         height=1.4
                     ),
                     ft.Container(height=6),
-                    create_hero_3d_badge(is_dark=is_dark),
+                    ft.Container(
+                        content=ft.Row(
+                            controls=[
+                                ft.Icon(ft.Icons.VERIFIED_USER_OUTLINED, size=18, color=colors["primary"]),
+                                ft.Text("Role-Isolated Institutional Portal", size=12, weight=ft.FontWeight.W_600, color=colors["primary"])
+                            ],
+                            spacing=8
+                        ),
+                        bgcolor=ft.Colors.with_opacity(0.08, colors["primary"]),
+                        border_radius=8,
+                        padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                        visible=bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
+                    ),
+                    ft.Container(
+                        content=create_hero_3d_badge(is_dark=is_dark),
+                        visible=not bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
+                    ),
                     ft.Container(height=6),
                     ft.Column(
                         controls=[

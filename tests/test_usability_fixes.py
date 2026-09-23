@@ -178,3 +178,148 @@ def test_coordinator_pool_year_without_prefix_heuristics():
     assert 'clean.startswith("23")' not in src
     assert '"NOT_REGISTERED"' in src
     assert '"Not Registered"' in src
+
+
+# =============================================================================
+# ISSUE 6: MOBILE ATTACHMENT MEMORY OPTIMIZATION & FAST LOGIN TESTS
+# =============================================================================
+def test_cache_service_department_lookups():
+    """Verify get_department_by_id and get_department_by_code operate accurately in memory."""
+    from services.cache_service import CacheService
+    # Ensure cache is initialized
+    CacheService.get_departments()
+
+    cse = CacheService.get_department_by_code("CSE")
+    assert cse is not None
+    assert cse.get("code") == "CSE"
+    assert "Computer Science" in cse.get("name")
+
+    dept_id = cse.get("id")
+    assert dept_id is not None
+    by_id = CacheService.get_department_by_id(dept_id)
+    assert by_id is not None
+    assert by_id.get("code") == "CSE"
+
+    assert CacheService.get_department_by_id(None) is None
+    assert CacheService.get_department_by_code(None) is None
+
+
+def test_student_login_fast_query_and_department_attachment():
+    """Verify student login performs single table select and attaches cached department info."""
+    from services.auth_service import AuthService
+    from utils.security import hash_password
+
+    pw_hash = hash_password("Pass@123")
+    mock_student = {
+        "id": "stu-1111-2222",
+        "roll_number": "240101030",
+        "full_name": "Test Student",
+        "department_id": "f4e141ef-14ca-44e4-a1ed-051ee0525419",
+        "password_hash": pw_hash,
+        "is_active": True,
+        "is_locked": False,
+        "failed_login_attempts": 0
+    }
+
+    mock_client = MagicMock()
+    mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [mock_student]
+
+    with patch("services.auth_service.get_trusted_backend_client", return_value=mock_client):
+        ok, msg, stu = AuthService.login_student("240101030", "Pass@123")
+        assert ok is True
+        assert stu is not None
+        assert stu["roll_number"] == "240101030"
+        # Department was attached without DB network join
+        assert "departments" in stu
+        assert stu["departments"]["code"] == "CSE"
+        # Verify select("*") was used (not embedded foreign join)
+        mock_client.table.return_value.select.assert_called_with("*")
+
+
+def test_staff_login_fast_query_and_department_attachment():
+    """Verify staff login queries select('*') and attaches department without foreign table join."""
+    from services.auth_service import AuthService
+    from utils.security import hash_password
+
+    pw_hash = hash_password("Pass@123")
+    mock_staff = {
+        "id": "staff-9999",
+        "username": "msm",
+        "full_name": "Coordinator User",
+        "role": UserRole.COORDINATOR.value,
+        "department_id": "f4e141ef-14ca-44e4-a1ed-051ee0525419",
+        "password_hash": pw_hash,
+        "is_active": True,
+        "is_locked": False,
+        "failed_login_attempts": 0
+    }
+
+    mock_client = MagicMock()
+    mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [mock_staff]
+
+    with patch("services.auth_service.get_trusted_backend_client", return_value=mock_client), \
+         patch("services.security_code_service.SecurityCodeService.verify_role_code", return_value=True):
+        ok, msg, staff = AuthService.login_staff(
+            role=UserRole.COORDINATOR.value,
+            username="msm",
+            password="Pass@123",
+            security_code="Pass@123",
+            department_id="f4e141ef-14ca-44e4-a1ed-051ee0525419"
+        )
+        assert ok is True
+        assert staff is not None
+        assert "departments" in staff
+        assert staff["departments"]["code"] == "CSE"
+        mock_client.table.return_value.select.assert_called_with("*")
+
+
+def test_mobile_attachment_memory_settings():
+    """Verify StudentView pick_files uses single-file selection and native compression."""
+    import inspect
+    from ui.views.student_view import StudentView
+
+    src = inspect.getsource(StudentView._render_new_complaint)
+    assert "allow_multiple=False" in src
+    assert "compression_quality=70" in src
+    assert "cancel_upload_on_window_blur=False" in src
+    assert "Add Attachment (0/2)" in src
+    assert "Maximum 2 Attachments Added" in src
+
+
+def test_excel_importer_size_limit():
+    """Verify Excel importer dialog enforces a 5MB size limit to protect mobile RAM."""
+    import inspect
+    import ui.components.excel_importer as excel_imp
+
+    src = inspect.getsource(excel_imp.show_excel_importer_dialog)
+    assert "5 * 1024 * 1024" in src
+    assert "5MB limit" in src
+
+
+def test_app_bar_non_blocking_unread_count():
+    """Verify create_app_bar does not make blocking queries and uses cached unread count."""
+    from ui.components.navbar import create_app_bar
+    from services.cache_service import CacheService
+
+    page = MagicMock(spec=ft.Page)
+    CacheService.set_cached_unread_count("user-1", "Student", None, 3)
+
+    app_bar = create_app_bar(
+        page=page,
+        user_name="Student One",
+        user_role="Student",
+        department_code="CSE",
+        user_id="user-1",
+        department_id=None,
+        on_logout=MagicMock()
+    )
+    assert app_bar is not None
+
+
+def test_api_health_version():
+    """Verify health endpoint returns updated production version."""
+    from app import api_health
+    health = api_health()
+    assert health["status"] == "healthy"
+    assert health["version"] == "v1.0.6-perf-mobile-live"
+

@@ -77,6 +77,30 @@ class CacheService:
             return cls._departments
 
     @classmethod
+    def get_department_by_id(cls, dept_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not dept_id:
+            return None
+        clean_id = str(dept_id).strip()
+        with cls._lock:
+            if cls._departments_by_id is None:
+                cls.get_departments()
+            if cls._departments_by_id:
+                return cls._departments_by_id.get(clean_id)
+        return None
+
+    @classmethod
+    def get_department_by_code(cls, code: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not code:
+            return None
+        clean_code = str(code).strip().upper()
+        with cls._lock:
+            if cls._departments_by_code is None:
+                cls.get_departments()
+            if cls._departments_by_code:
+                return cls._departments_by_code.get(clean_code)
+        return None
+
+    @classmethod
     def get_special_dept_id(cls, code: str) -> Optional[str]:
         clean_code = code.strip().upper()
         with cls._lock:

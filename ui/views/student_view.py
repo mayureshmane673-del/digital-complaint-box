@@ -5,9 +5,12 @@ private anonymous tracking, hostel status, and feedback rating.
 """
 
 import weakref
+import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import flet as ft
+
+logger = logging.getLogger("complaint_box.student_view")
 from services.complaint_service import ComplaintService
 from services.feedback_service import FeedbackService
 from services.hostel_service import HostelService
@@ -53,6 +56,19 @@ class StudentView:
         self.categories = []
         self.subcategories_by_cat = {}
         self.locations = []
+        self.file_picker = ft.FilePicker()
+        if hasattr(self.page, "services"):
+            if self.file_picker not in self.page.services:
+                self.page.services.append(self.file_picker)
+        elif hasattr(self.page, "_services"):
+            try:
+                self.page._services.register_service(self.file_picker)
+            except Exception:
+                pass
+        try:
+            self.file_picker._parent = weakref.ref(self.page)
+        except Exception:
+            pass
 
     def _ensure_reference_data_loaded(self):
         if not self.categories:
@@ -426,19 +442,23 @@ class StudentView:
         # File picker for attachments (Max 2)
         selected_files: List[Dict[str, Any]] = []
         files_display = ft.Column(spacing=4)
-        file_picker = ft.FilePicker()
-        if hasattr(self.page, "services"):
-            if file_picker not in self.page.services:
-                self.page.services.append(file_picker)
-        elif hasattr(self.page, "_services"):
-            try:
-                self.page._services.register_service(file_picker)
-            except Exception:
-                pass
-        try:
-            file_picker._parent = weakref.ref(self.page)
-        except Exception:
-            pass
+        attach_btn = ft.ElevatedButton(
+            content=ft.Text("Add Attachment (0/2)"),
+            icon=ft.Icons.ATTACH_FILE
+        )
+
+        def update_attach_btn():
+            count = len(selected_files)
+            if count == 0:
+                attach_btn.disabled = False
+                attach_btn.content = ft.Text("Add Attachment (0/2)")
+            elif count == 1:
+                attach_btn.disabled = False
+                attach_btn.content = ft.Text("Add Another Attachment (1/2)")
+            else:
+                attach_btn.disabled = True
+                attach_btn.content = ft.Text("Maximum 2 Attachments Added")
+            self.page.update()
 
         # In-form alert box
         alert_box = ft.Container(
@@ -466,6 +486,7 @@ class StudentView:
                 removed = selected_files.pop(idx)
                 show_feedback_message(self.page, f"Removed {removed.get('name', 'attachment')}", is_error=False)
                 refresh_files_display()
+                update_attach_btn()
 
         def refresh_files_display():
             files_display.controls.clear()
@@ -510,16 +531,25 @@ class StudentView:
             self.page.update()
 
         async def on_pick_attachment(e):
+            if len(selected_files) >= 2:
+                show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
+                return
+            attach_btn.disabled = True
+            attach_btn.content = ft.Text("Opening Picker...")
+            self.page.update()
+
             try:
-                files = await file_picker.pick_files(
+                files = await self.file_picker.pick_files(
                     file_type=ft.FilePickerFileType.CUSTOM,
                     allowed_extensions=["jpg", "jpeg", "png", "webp", "mp4", "mov", "pdf"],
-                    allow_multiple=True,
+                    allow_multiple=False,
                     with_data=True,
+                    compression_quality=70,
                     cancel_upload_on_window_blur=False
                 )
                 if not files:
                     return
+
                 for f in files:
                     if len(selected_files) >= 2:
                         show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
@@ -535,8 +565,13 @@ class StudentView:
                         "size": f.size
                     })
                 refresh_files_display()
-            except Exception:
+            except Exception as ex:
+                logger.warning("Attachment picker error: %s", ex)
                 show_feedback_message(self.page, "Unable to select attachment. Please try again.", is_error=True)
+            finally:
+                update_attach_btn()
+
+        attach_btn.on_click = on_pick_attachment
 
         submit_btn = ft.ElevatedButton(
             content=ft.Text("Submit Complaint"),
@@ -637,6 +672,7 @@ class StudentView:
                         except Exception:
                             pass
 
+                    selected_files.clear()
                     show_feedback_message(self.page, f"Complaint #{cid} registered successfully!", is_error=False)
                     self.cached_complaints = None
                     self._switch_view(2)  # Switch to My Complaints
@@ -687,11 +723,7 @@ class StudentView:
                     ft.Text("Attachments (Max 2 files, up to 10MB each: JPG, PNG, WEBP, MP4, MOV, PDF)", size=13, weight=ft.FontWeight.BOLD, color=colors["text"]),
                     ft.Row(
                         controls=[
-                            ft.ElevatedButton(
-                                content=ft.Text("Add Attachment"),
-                                icon=ft.Icons.ATTACH_FILE,
-                                on_click=on_pick_attachment
-                            )
+                            attach_btn
                         ]
                     ),
                     files_display,

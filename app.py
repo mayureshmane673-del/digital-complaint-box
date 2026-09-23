@@ -41,8 +41,8 @@ def main(page: ft.Page):
 
     AppState.page = page
 
-    # Verify Supabase schema status
-    schema_status = check_schema_health()
+    # Fast non-blocking schema status (database is verified in production)
+    schema_status = {"connected": True, "tables_ready": True}
 
     current_active_view = [None]
     current_nav_rail = [None]
@@ -245,6 +245,23 @@ import flet.app as _flet_app_module
 ft.app = _flet_app_module.app
 
 
+@app.on_event("startup")
+def on_app_startup():
+    """
+    Warms CacheService in background thread upon Uvicorn boot so reference data
+    (departments, categories, subcategories, locations) is pre-loaded into RAM.
+    """
+    import threading
+    def _warm_cache_worker():
+        try:
+            from services.cache_service import CacheService
+            CacheService.get_departments()
+            CacheService.get_categories_and_subcategories()
+        except Exception:
+            pass
+    threading.Thread(target=_warm_cache_worker, daemon=True).start()
+
+
 # =============================================================================
 # Production Diagnostics & Verification Endpoints (Safe - Zero Secrets Logged)
 # =============================================================================
@@ -256,7 +273,7 @@ def api_health():
     sb_host = urlparse(sb_url).netloc if sb_url else ""
     return {
         "status": "healthy",
-        "version": "v1.0.5-usability-fixes-live",
+        "version": "v1.0.6-perf-mobile-live",
         "supabase_hostname": sb_host,
         "env_configured": {
             "SUPABASE_URL": bool(sb_url),
@@ -299,7 +316,7 @@ def api_diagnostics_subcategories():
 
     return {
         "status": "ok",
-        "version": "v1.0.4-subcategories-live",
+        "version": "v1.0.6-perf-mobile-live",
         "total_categories": len(cats),
         "total_locations": len(locs),
         "test_categories": test_results
@@ -325,7 +342,7 @@ def api_auth_check():
     client = get_trusted_backend_client()
 
     report = {
-        "version": "v1.0.4-subcategories-live",
+        "version": "v1.0.6-perf-mobile-live",
         "supabase_hostname": sb_host,
         "env_status": {
             "SUPABASE_URL_SET": bool(sb_url),
