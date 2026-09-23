@@ -217,6 +217,85 @@ class ComplaintService:
         return True, "Complaint updated successfully."
 
     # -------------------------------------------------------------------------
+    # STUDENT SOFT DELETE
+    # -------------------------------------------------------------------------
+    @classmethod
+    def delete_complaint_by_student(
+        cls,
+        complaint_id: int,
+        student_id: str
+    ) -> Tuple[bool, str]:
+        """
+        Soft-deletes a student's own complaint:
+        - Must be owned by the student (direct or anonymous ownership).
+        - Must be in 'Pending' status.
+        - Must NOT have any administrative action (has_admin_action is False).
+        - Sets is_deleted = True, deleted_by_role = 'Student', delete_reason = 'Deleted by student'.
+        - Records immutable complaint_history audit entry with action = 'DELETED_BY_STUDENT'.
+        - Invalidates cache.
+        """
+        try:
+            complaint_id = int(complaint_id)
+        except (ValueError, TypeError):
+            return False, "Invalid complaint ID."
+
+        if not student_id:
+            return False, "Unauthorized: Student identity is required."
+
+        client = get_trusted_backend_client()
+        res = client.table("complaints").select("*").eq("complaint_id", complaint_id).execute()
+        if not res.data:
+            return False, "Complaint not found."
+
+        c = res.data[0]
+
+        # Verify ownership: either direct student_id match or anonymous ownership record
+        is_owner = False
+        if c.get("student_id") and str(c.get("student_id")) == str(student_id):
+            is_owner = True
+        elif c.get("is_anonymous"):
+            anon_check = client.table("anonymous_complaint_owners").select("id").eq("complaint_id", complaint_id).eq("student_id", student_id).execute()
+            if anon_check.data and len(anon_check.data) > 0:
+                is_owner = True
+
+        if not is_owner:
+            return False, "Unauthorized: You can only delete your own complaints."
+
+        if c.get("is_deleted"):
+            return False, "This complaint has already been deleted."
+
+        # Check eligibility: must be Pending and have no admin action
+        if c.get("status") != ComplaintStatus.PENDING.value or c.get("has_admin_action"):
+            return False, "Cannot delete complaint: Administrative review or action has already begun."
+
+        # Perform soft delete
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            client.table("complaints").update({
+                "is_deleted": True,
+                "deleted_by_role": "Student",
+                "delete_reason": "Deleted by student",
+                "deleted_at": now_iso
+            }).eq("complaint_id", complaint_id).execute()
+
+            # Record immutable audit history
+            client.table("complaint_history").insert({
+                "complaint_id": complaint_id,
+                "action": "DELETED_BY_STUDENT",
+                "actor_type": "Student",
+                "actor_role": "Student",
+                "actor_id": "Anonymous" if c.get("is_anonymous") else str(student_id),
+                "previous_state": {"status": c.get("status"), "is_deleted": False},
+                "new_state": {"is_deleted": True},
+                "remarks": "Complaint soft-deleted by student."
+            }).execute()
+
+            CacheService.invalidate_metrics()
+            return True, f"Complaint #{complaint_id} deleted successfully."
+        except Exception as ex:
+            return False, f"Unable to delete complaint: {ex}"
+
+    # -------------------------------------------------------------------------
     # STATUS MANAGEMENT & RULES
     # -------------------------------------------------------------------------
     @classmethod

@@ -4,6 +4,8 @@ registration with roll number pool checks, role-based staff security codes, acco
 full responsive reflow, loading state prevention, and dark mode theming.
 """
 
+import time
+import logging
 from typing import Callable, Optional, Dict, Any, List
 import flet as ft
 from services.auth_service import AuthService
@@ -16,6 +18,8 @@ from ui.state import AppState
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
 from ui.components.animated_chart import create_hero_3d_badge
 from models.user import UserRole
+
+logger = logging.getLogger("complaint_box.auth_view")
 
 # Standard fallback departments if database not yet migrated
 DEFAULT_DEPTS = [
@@ -85,9 +89,21 @@ class AuthView:
         # ---------------------------------------------------------------------
         st_login_roll = ft.TextField(label="Roll Number / Student ID", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True)
         st_login_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True)
-        btn_st_login = ft.ElevatedButton("Login", icon=ft.Icons.LOGIN, style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE))
+        btn_st_login = ft.ElevatedButton(
+            content=ft.Row(
+                controls=[
+                    ft.Icon(ft.Icons.LOGIN, color=ft.Colors.WHITE, size=18),
+                    ft.Text("Login", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=8
+            ),
+            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+        )
 
         def do_student_login(e):
+            if btn_st_login.disabled:
+                return
             alert_st_login.hide_alert()
             roll_val = (st_login_roll.value or "").strip()
             pass_val = st_login_pass.value or ""
@@ -98,23 +114,50 @@ class AuthView:
                 return
 
             btn_st_login.disabled = True
-            btn_st_login.content = "Verifying..."
+            btn_st_login.content = ft.Row(
+                controls=[
+                    ft.ProgressRing(width=16, height=16, stroke_width=2, color=ft.Colors.WHITE),
+                    ft.Text("Signing in...", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=8
+            )
             self.page.update()
 
+            t0 = time.perf_counter()
             try:
                 ok, msg, student = AuthService.login_student(roll_val, pass_val)
+                elapsed = time.perf_counter() - t0
+                logger.info("Student auth query completed in %.3fs", elapsed)
                 if ok and student:
                     show_feedback_message(self.page, "Login successful!", is_error=False)
                     self.on_authenticated(student, UserRole.STUDENT.value)
                 else:
+                    btn_st_login.disabled = False
+                    btn_st_login.content = ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.LOGIN, color=ft.Colors.WHITE, size=18),
+                            ft.Text("Login", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                        ],
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        spacing=8
+                    )
                     alert_st_login.show_alert(msg, is_error=True)
                     show_feedback_message(self.page, msg, is_error=True)
+                    self.page.update()
             except Exception as ex:
+                logger.exception("Student login error: %s", ex)
+                btn_st_login.disabled = False
+                btn_st_login.content = ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.LOGIN, color=ft.Colors.WHITE, size=18),
+                        ft.Text("Login", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=8
+                )
                 alert_st_login.show_alert("Unable to complete login. Please try again.", is_error=True)
                 show_feedback_message(self.page, "Unable to complete login. Please try again.", is_error=True)
-            finally:
-                btn_st_login.disabled = False
-                btn_st_login.content = "Login"
                 self.page.update()
 
         btn_st_login.on_click = do_student_login
@@ -250,9 +293,21 @@ class AuthView:
             self.page.update()
 
         sf_login_role.on_change = on_staff_role_change
-        btn_sf_login = ft.ElevatedButton("Staff Sign In", icon=ft.Icons.LOCK_OPEN, style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE))
+        btn_sf_login = ft.ElevatedButton(
+            content=ft.Row(
+                controls=[
+                    ft.Icon(ft.Icons.LOCK_OPEN, color=ft.Colors.WHITE, size=18),
+                    ft.Text("Staff Sign In", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=8
+            ),
+            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+        )
 
         def do_staff_login(e):
+            if btn_sf_login.disabled:
+                return
             alert_sf_login.hide_alert()
             role_val = sf_login_role.value
             dept_val = sf_login_dept.value if (sf_login_dept.visible and role_val in (UserRole.HOD.value, UserRole.COORDINATOR.value)) else None
@@ -270,9 +325,17 @@ class AuthView:
                 return
 
             btn_sf_login.disabled = True
-            btn_sf_login.content = "Verifying..."
+            btn_sf_login.content = ft.Row(
+                controls=[
+                    ft.ProgressRing(width=16, height=16, stroke_width=2, color=ft.Colors.WHITE),
+                    ft.Text("Signing in...", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=8
+            )
             self.page.update()
 
+            t0 = time.perf_counter()
             try:
                 ok, msg, staff = AuthService.login_staff(
                     role=role_val,
@@ -281,18 +344,37 @@ class AuthView:
                     security_code=code_val,
                     department_id=dept_val
                 )
+                elapsed = time.perf_counter() - t0
+                logger.info("Staff auth query completed in %.3fs", elapsed)
                 if ok and staff:
                     show_feedback_message(self.page, "Staff login successful!", is_error=False)
                     self.on_authenticated(staff, role_val)
                 else:
+                    btn_sf_login.disabled = False
+                    btn_sf_login.content = ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.LOCK_OPEN, color=ft.Colors.WHITE, size=18),
+                            ft.Text("Staff Sign In", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                        ],
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        spacing=8
+                    )
                     alert_sf_login.show_alert(msg, is_error=True)
                     show_feedback_message(self.page, msg, is_error=True)
+                    self.page.update()
             except Exception as ex:
+                logger.exception("Staff login error: %s", ex)
+                btn_sf_login.disabled = False
+                btn_sf_login.content = ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.LOCK_OPEN, color=ft.Colors.WHITE, size=18),
+                        ft.Text("Staff Sign In", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=8
+                )
                 alert_sf_login.show_alert("Invalid username, password, or security code.", is_error=True)
                 show_feedback_message(self.page, "Invalid username, password, or security code.", is_error=True)
-            finally:
-                btn_sf_login.disabled = False
-                btn_sf_login.content = "Staff Sign In"
                 self.page.update()
 
         btn_sf_login.on_click = do_staff_login

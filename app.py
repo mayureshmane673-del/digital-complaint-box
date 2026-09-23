@@ -49,11 +49,22 @@ def main(page: ft.Page):
     current_portal_content = [None]
 
     def on_logout():
+        try:
+            if hasattr(page, "session") and page.session and hasattr(page.session, "store") and page.session.store:
+                page.session.store.clear()
+        except Exception:
+            pass
         AppState.clear_user()
         page.appbar = None
         render_auth_view()
 
     def on_authenticated(user_data: Dict[str, Any], role: str):
+        try:
+            if hasattr(page, "session") and page.session and hasattr(page.session, "store") and page.session.store:
+                page.session.store.set("current_user", user_data)
+                page.session.store.set("role", role)
+        except Exception:
+            pass
         AppState.set_user(user_data, role)
         render_portal_view()
 
@@ -207,8 +218,23 @@ def main(page: ft.Page):
 
     page.on_resized = on_page_resize
 
-    # Initial start
-    render_auth_view()
+    # Initial start: Check if this session is already authenticated (e.g. mobile tab switch/reconnection)
+    restored_user = None
+    restored_role = None
+    try:
+        if hasattr(page, "session") and page.session and hasattr(page.session, "store") and page.session.store:
+            restored_user = page.session.store.get("current_user")
+            restored_role = page.session.store.get("role")
+    except Exception:
+        pass
+
+    if restored_user and restored_role:
+        AppState.set_user(restored_user, restored_role)
+        render_portal_view()
+    elif AppState.is_authenticated():
+        render_portal_view()
+    else:
+        render_auth_view()
 
 
 # Export ASGI application for production Uvicorn / Render Web deployment
@@ -230,7 +256,7 @@ def api_health():
     sb_host = urlparse(sb_url).netloc if sb_url else ""
     return {
         "status": "healthy",
-        "version": "v1.0.4-subcategories-live",
+        "version": "v1.0.5-usability-fixes-live",
         "supabase_hostname": sb_host,
         "env_configured": {
             "SUPABASE_URL": bool(sb_url),

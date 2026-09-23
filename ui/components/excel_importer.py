@@ -43,7 +43,8 @@ def show_excel_importer_dialog(
                 file_type=ft.FilePickerFileType.CUSTOM,
                 allowed_extensions=["xlsx", "xls", "csv"],
                 allow_multiple=False,
-                with_data=True
+                with_data=True,
+                cancel_upload_on_window_blur=False
             )
             if not files or len(files) == 0:
                 selected_file_info[0] = None

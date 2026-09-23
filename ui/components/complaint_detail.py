@@ -219,6 +219,83 @@ def show_complaint_detail_dialog(
     # Management controls
     management_controls = []
 
+    if current_role == UserRole.STUDENT.value:
+        is_pending = (status == "Pending")
+        no_admin_action = not complaint.get("has_admin_action", False)
+
+        if is_pending and no_admin_action:
+            delete_btn = ft.ElevatedButton(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.DELETE_FOREVER, size=16, color=ft.Colors.WHITE),
+                    ft.Text("Delete Complaint", size=13, color=ft.Colors.WHITE)
+                ], spacing=6),
+                style=ft.ButtonStyle(bgcolor="#dc2626", color=ft.Colors.WHITE)
+            )
+
+            def open_delete_confirm(e):
+                confirm_btn = ft.ElevatedButton(
+                    content=ft.Text("Yes, Delete"),
+                    style=ft.ButtonStyle(bgcolor="#dc2626", color=ft.Colors.WHITE)
+                )
+
+                def do_confirm_delete(ev):
+                    confirm_btn.disabled = True
+                    confirm_btn.content = ft.Text("Deleting...")
+                    page.update()
+                    ok, msg = ComplaintService.delete_complaint_by_student(cid, current_user_id)
+                    close_dialog(page, confirm_dlg)
+                    close_dialog(page, dlg)
+                    if ok:
+                        show_feedback_message(page, msg, is_error=False)
+                        if on_updated:
+                            on_updated()
+                    else:
+                        show_feedback_message(page, msg, is_error=True)
+                    page.update()
+
+                confirm_btn.on_click = do_confirm_delete
+
+                confirm_dlg = ft.AlertDialog(
+                    title=ft.Text("Confirm Deletion", weight=ft.FontWeight.BOLD, color=colors["text"]),
+                    content=ft.Text(f"Are you sure you want to delete Complaint #{cid}? This action cannot be undone.", size=14, color=colors["text"]),
+                    bgcolor=colors["surface"],
+                    actions=[
+                        ft.TextButton("Cancel", on_click=lambda _: close_dialog(page, confirm_dlg)),
+                        confirm_btn
+                    ]
+                )
+                open_dialog(page, confirm_dlg)
+
+            delete_btn.on_click = open_delete_confirm
+            management_controls.append(
+                ft.Container(
+                    content=ft.Row([
+                        ft.Text("Need to withdraw this grievance?", size=13, color=colors["text_muted"]),
+                        delete_btn
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
+                    bgcolor=colors.get("surface_variant", "#f1f5f9"),
+                    padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                    border_radius=8
+                )
+            )
+        else:
+            management_controls.append(
+                ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.LOCK_OUTLINE, size=16, color=colors["text_muted"]),
+                        ft.Text(
+                            "Complaint cannot be deleted: Administrative review has already started or status is no longer Pending.",
+                            size=12,
+                            color=colors["text_muted"],
+                            expand=True
+                        )
+                    ], spacing=6),
+                    bgcolor=colors.get("surface_variant", "#f1f5f9"),
+                    padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                    border_radius=8
+                )
+            )
+
     can_change_status = current_role in (UserRole.HOD.value, UserRole.COORDINATOR.value, UserRole.HOSTEL_INCHARGE.value, UserRole.PRINCIPAL.value)
     if can_change_status:
         status_dropdown = ft.Dropdown(

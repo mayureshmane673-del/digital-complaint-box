@@ -50,11 +50,11 @@ class StaffView:
         self.categories = []
         self.subcategories_by_cat = {}
         self.active_container = ft.Container(expand=True)
-        self._load_categories_and_subcategories()
 
-    def _load_categories_and_subcategories(self):
-        from services.cache_service import CacheService
-        self.categories, self.subcategories_by_cat, _ = CacheService.get_categories_and_subcategories()
+    def _ensure_categories_loaded(self):
+        if not self.categories:
+            from services.cache_service import CacheService
+            self.categories, self.subcategories_by_cat, _ = CacheService.get_categories_and_subcategories()
 
     def render(self) -> ft.Control:
         self._switch_view(self.selected_tab_index)
@@ -595,17 +595,11 @@ class StaffView:
                 return ("TE", "Third Year (TE)", "#d97706", "#fef3c7" if not is_dark else "#78350f")
             elif st_year in ("BE", "FINAL YEAR", "FOURTH YEAR", "4", "4TH", "4TH YEAR"):
                 return ("BE", "Fourth Year (BE)", "#059669", "#d1fae5" if not is_dark else "#064e3b")
+            elif st_year:
+                return (st_year, st_year, colors["text_muted"], ft.Colors.TRANSPARENT)
 
-            clean = roll_no.upper()
-            if "FE" in clean or clean.startswith("26"):
-                return ("FE", "First Year (FE)", "#2563eb", "#dbeafe" if not is_dark else "#1e3a8a")
-            elif "SE" in clean or clean.startswith("25"):
-                return ("SE", "Second Year (SE)", "#7c3aed", "#ede9fe" if not is_dark else "#4c1d95")
-            elif "TE" in clean or clean.startswith("24"):
-                return ("TE", "Third Year (TE)", "#d97706", "#fef3c7" if not is_dark else "#78350f")
-            elif "BE" in clean or clean.startswith("23"):
-                return ("BE", "Fourth Year (BE)", "#059669", "#d1fae5" if not is_dark else "#064e3b")
-            return ("FE", "First Year (FE)", "#2563eb", "#dbeafe" if not is_dark else "#1e3a8a")
+            # Not registered yet: DO NOT guess academic year from roll number
+            return ("NOT_REGISTERED", "Not Registered", colors["text_muted"], ft.Colors.TRANSPARENT)
 
         single_roll_field = ft.TextField(label="Add Single Roll Number", hint_text="e.g. 240101030", dense=True, width=220)
 
@@ -723,7 +717,8 @@ class StaffView:
                 ft.dropdown.Option("FE", "First Year (FE)"),
                 ft.dropdown.Option("SE", "Second Year (SE)"),
                 ft.dropdown.Option("TE", "Third Year (TE)"),
-                ft.dropdown.Option("BE", "Fourth Year (BE)")
+                ft.dropdown.Option("BE", "Fourth Year (BE)"),
+                ft.dropdown.Option("NOT_REGISTERED", "Not Registered")
             ],
             value="ALL",
             dense=True,
@@ -799,7 +794,7 @@ class StaffView:
                 filtered.append(item)
 
             # Sort
-            year_order = {"FE": 1, "SE": 2, "TE": 3, "BE": 4}
+            year_order = {"FE": 1, "SE": 2, "TE": 3, "BE": 4, "NOT_REGISTERED": 5}
             if s_val == "ROLL_ASC":
                 filtered.sort(key=lambda x: x["roll"])
             elif s_val == "ROLL_DESC":
@@ -841,7 +836,7 @@ class StaffView:
                                     bgcolor=item["y_bg"],
                                     border_radius=8,
                                     padding=ft.padding.symmetric(horizontal=8, vertical=3)
-                                )
+                                ) if item["y_key"] != "NOT_REGISTERED" else ft.Text("—", size=13, color=colors["text_muted"])
                             ),
                             ft.DataCell(ft.Text(st_display, size=12, color=colors["text"] if item["st_name"] else colors["text_muted"])),
                             ft.DataCell(

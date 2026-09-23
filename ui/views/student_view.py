@@ -50,12 +50,14 @@ class StudentView:
         self.selected_tab_index = 0
         self.cached_complaints = None
         self.active_container = ft.Container(expand=True)
+        self.categories = []
         self.subcategories_by_cat = {}
-        self._load_reference_data()
+        self.locations = []
 
-    def _load_reference_data(self):
-        from services.cache_service import CacheService
-        self.categories, self.subcategories_by_cat, self.locations = CacheService.get_categories_and_subcategories()
+    def _ensure_reference_data_loaded(self):
+        if not self.categories:
+            from services.cache_service import CacheService
+            self.categories, self.subcategories_by_cat, self.locations = CacheService.get_categories_and_subcategories()
 
     def render(self) -> ft.Control:
         self._switch_view(self.selected_tab_index)
@@ -204,6 +206,7 @@ class StudentView:
     # TAB 1: NEW COMPLAINT WIZARD
     # -------------------------------------------------------------------------
     def _render_new_complaint(self) -> ft.Control:
+        self._ensure_reference_data_loaded()
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
@@ -458,13 +461,62 @@ class StudentView:
             alert_box.content.controls[1].value = msg
             self.page.update()
 
+        def remove_file(idx: int):
+            if 0 <= idx < len(selected_files):
+                removed = selected_files.pop(idx)
+                show_feedback_message(self.page, f"Removed {removed.get('name', 'attachment')}", is_error=False)
+                refresh_files_display()
+
+        def refresh_files_display():
+            files_display.controls.clear()
+            for idx, f in enumerate(selected_files):
+                f_name = f.get("name", "attachment")
+                f_size = f.get("size", 0)
+                size_str = f"{f_size / 1024:.1f} KB" if f_size else ""
+
+                def make_remover(i):
+                    return lambda _: remove_file(i)
+
+                del_btn = ft.IconButton(
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    icon_color="#dc2626",
+                    tooltip=f"Remove {f_name}",
+                    icon_size=20,
+                    on_click=make_remover(idx)
+                )
+
+                files_display.controls.append(
+                    ft.Container(
+                        content=ft.Row(
+                            controls=[
+                                ft.Row(
+                                    controls=[
+                                        ft.Icon(ft.Icons.ATTACH_FILE, size=16, color=colors["primary"]),
+                                        ft.Text(f"{f_name} ({size_str})", size=13, weight=ft.FontWeight.W_500, color=colors["text"])
+                                    ],
+                                    spacing=8
+                                ),
+                                del_btn
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER
+                        ),
+                        bgcolor=colors.get("surface_variant", "#f1f5f9"),
+                        padding=ft.padding.symmetric(horizontal=12, vertical=4),
+                        border_radius=8,
+                        border=ft.Border.all(1, colors["border"])
+                    )
+                )
+            self.page.update()
+
         async def on_pick_attachment(e):
             try:
                 files = await file_picker.pick_files(
                     file_type=ft.FilePickerFileType.CUSTOM,
                     allowed_extensions=["jpg", "jpeg", "png", "webp", "mp4", "mov", "pdf"],
                     allow_multiple=True,
-                    with_data=True
+                    with_data=True,
+                    cancel_upload_on_window_blur=False
                 )
                 if not files:
                     return
@@ -482,16 +534,7 @@ class StudentView:
                         "path": f.path,
                         "size": f.size
                     })
-                    files_display.controls.append(
-                        ft.Row(
-                            controls=[
-                                ft.Icon(ft.Icons.ATTACH_FILE, size=16, color=colors["primary"]),
-                                ft.Text(f"{f.name} ({f.size / 1024:.1f} KB)", size=12, color=colors["text"])
-                            ],
-                            spacing=6
-                        )
-                    )
-                self.page.update()
+                refresh_files_display()
             except Exception:
                 show_feedback_message(self.page, "Unable to select attachment. Please try again.", is_error=True)
 
@@ -669,6 +712,7 @@ class StudentView:
     # TAB 2: MY COMPLAINTS & EDITING
     # -------------------------------------------------------------------------
     def _render_my_complaints(self) -> ft.Control:
+        self._ensure_reference_data_loaded()
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
@@ -796,7 +840,41 @@ class StudentView:
                     continue
                 filtered.append(c)
 
-            cards = [create_complaint_card(c, self._open_detail_dialog) for c in filtered]
+            def confirm_delete_complaint(comp: Dict[str, Any]):
+                cid = comp.get("complaint_id")
+                confirm_btn = ft.ElevatedButton(
+                    content=ft.Text("Yes, Delete"),
+                    style=ft.ButtonStyle(bgcolor="#dc2626", color=ft.Colors.WHITE)
+                )
+
+                def do_delete(ev):
+                    confirm_btn.disabled = True
+                    confirm_btn.content = ft.Text("Deleting...")
+                    self.page.update()
+                    ok, msg = ComplaintService.delete_complaint_by_student(cid, self.student_id)
+                    close_dialog(self.page, del_dlg)
+                    if ok:
+                        show_feedback_message(self.page, msg, is_error=False)
+                        self.cached_complaints = None
+                        refresh_list(force_reload=True)
+                    else:
+                        show_feedback_message(self.page, msg, is_error=True)
+                        self.page.update()
+
+                confirm_btn.on_click = do_delete
+
+                del_dlg = ft.AlertDialog(
+                    title=ft.Text("Confirm Deletion", weight=ft.FontWeight.BOLD, color=colors["text"]),
+                    content=ft.Text(f"Are you sure you want to delete Complaint #{cid}? This action cannot be undone.", size=14, color=colors["text"]),
+                    bgcolor=colors["surface"],
+                    actions=[
+                        ft.TextButton("Cancel", on_click=lambda _: close_dialog(self.page, del_dlg)),
+                        confirm_btn
+                    ]
+                )
+                open_dialog(self.page, del_dlg)
+
+            cards = [create_complaint_card(c, self._open_detail_dialog, is_staff=False, on_delete=confirm_delete_complaint) for c in filtered]
             if not cards:
                 cards.append(
                     ft.Container(

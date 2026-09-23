@@ -3,7 +3,7 @@ ui/components/complaint_card.py: Presentation card for complaints with status pi
 Supports responsive reflow and Dark Mode styling.
 """
 
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, Optional
 import flet as ft
 from ui.theme import (
     COLOR_PRIMARY, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors
@@ -15,7 +15,8 @@ from utils.helpers import format_datetime
 def create_complaint_card(
     complaint: Dict[str, Any],
     on_view_details: Callable[[Dict[str, Any]], None],
-    is_staff: bool = False
+    is_staff: bool = False,
+    on_delete: Optional[Callable[[Dict[str, Any]], None]] = None
 ) -> ft.Container:
     """Renders a complaint card with full Dark Mode and responsive support."""
     is_dark = AppState.is_dark_mode
@@ -144,16 +145,38 @@ def create_complaint_card(
                             spacing=8,
                             wrap=True
                         ),
-                        ft.ElevatedButton(
-                            content=ft.Text("View Details"),
-                            icon=ft.Icons.ARROW_FORWARD,
-                            style=ft.ButtonStyle(
-                                bgcolor=colors["primary"],
-                                color=ft.Colors.WHITE,
-                                padding=ft.padding.symmetric(horizontal=14, vertical=8),
-                                shape=ft.RoundedRectangleBorder(radius=8)
-                            ),
-                            on_click=lambda _: on_view_details(complaint)
+                        ft.Row(
+                            controls=[
+                                *(
+                                    [
+                                        ft.OutlinedButton(
+                                            content=ft.Row([
+                                                ft.Icon(ft.Icons.DELETE_OUTLINE, size=16, color="#dc2626"),
+                                                ft.Text("Delete", size=12, color="#dc2626")
+                                            ], spacing=4),
+                                            style=ft.ButtonStyle(
+                                                side=ft.BorderSide(1, "#dc2626"),
+                                                padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                                                shape=ft.RoundedRectangleBorder(radius=8)
+                                            ),
+                                            tooltip="Delete this pending grievance",
+                                            on_click=lambda _: on_delete(complaint)
+                                        )
+                                    ] if (on_delete and not is_staff and status == "Pending" and not complaint.get("has_admin_action")) else []
+                                ),
+                                ft.ElevatedButton(
+                                    content=ft.Text("View Details"),
+                                    icon=ft.Icons.ARROW_FORWARD,
+                                    style=ft.ButtonStyle(
+                                        bgcolor=colors["primary"],
+                                        color=ft.Colors.WHITE,
+                                        padding=ft.padding.symmetric(horizontal=14, vertical=8),
+                                        shape=ft.RoundedRectangleBorder(radius=8)
+                                    ),
+                                    on_click=lambda _: on_view_details(complaint)
+                                )
+                            ],
+                            spacing=8
                         )
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
