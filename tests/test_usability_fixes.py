@@ -274,13 +274,13 @@ def test_staff_login_fast_query_and_department_attachment():
 
 
 def test_mobile_attachment_memory_settings():
-    """Verify StudentView pick_files uses single-file selection and native compression."""
+    """Verify StudentView pick_files uses memory-safe with_data=False and single-file selection."""
     import inspect
     from ui.views.student_view import StudentView
 
     src = inspect.getsource(StudentView._render_new_complaint)
     assert "allow_multiple=False" in src
-    assert "compression_quality=70" in src
+    assert "with_data=False" in src
     assert "cancel_upload_on_window_blur=False" in src
     assert "Add Attachment (0/2)" in src
     assert "Maximum 2 Attachments Added" in src
@@ -321,5 +321,5 @@ def test_api_health_version():
     from app import api_health
     health = api_health()
     assert health["status"] == "healthy"
-    assert health["version"] == "v1.0.6-perf-mobile-live"
+    assert health["version"] == "v1.0.7-mobile-attachment-fix"
 

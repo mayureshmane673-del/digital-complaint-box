@@ -39,6 +39,8 @@ def main(page: ft.Page):
     page.window_min_height = 540
     page.padding = 0
 
+    # Initialize multi-session isolated state for this connection
+    AppState.init_session(page)
     AppState.page = page
 
     # Fast non-blocking schema status (database is verified in production)
@@ -153,15 +155,30 @@ def main(page: ft.Page):
             on_logout=on_logout
         )
 
+        # Restore active tab index from session store so mobile reconnects keep form in view
+        active_tab = 0
+        try:
+            if hasattr(page, "session") and page.session and hasattr(page.session, "store") and page.session.store:
+                active_tab = page.session.store.get("active_tab_index", 0)
+        except Exception:
+            pass
+
         # Active View Component
         if role == UserRole.STUDENT.value:
-            student_view = StudentView(page, user)
+            student_view = StudentView(page, user, initial_tab=active_tab)
             current_active_view[0] = student_view
         else:
             staff_view = StaffView(page, user, role)
+            if active_tab != 0:
+                staff_view.selected_tab_index = active_tab
             current_active_view[0] = staff_view
 
         def on_nav_change(index: int):
+            try:
+                if hasattr(page, "session") and page.session and hasattr(page.session, "store") and page.session.store:
+                    page.session.store.set("active_tab_index", index)
+            except Exception:
+                pass
             if current_active_view[0]:
                 current_active_view[0]._switch_view(index)
 
@@ -237,8 +254,13 @@ def main(page: ft.Page):
         render_auth_view()
 
 
+# Ensure uploads directory structure exists for direct HTTP PUT streaming
+UPLOADS_DIR = ROOT_DIR / "uploads"
+TEMP_UPLOADS_DIR = UPLOADS_DIR / "temp"
+TEMP_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
 # Export ASGI application for production Uvicorn / Render Web deployment
-app = ft.run(main=main, export_asgi_app=True)
+app = ft.run(main=main, export_asgi_app=True, upload_dir="uploads")
 
 # Restore ft.app function in case ft.run internal imports shadowed it with the flet.app module
 import flet.app as _flet_app_module
@@ -273,7 +295,7 @@ def api_health():
     sb_host = urlparse(sb_url).netloc if sb_url else ""
     return {
         "status": "healthy",
-        "version": "v1.0.6-perf-mobile-live",
+        "version": "v1.0.7-mobile-attachment-fix",
         "supabase_hostname": sb_host,
         "env_configured": {
             "SUPABASE_URL": bool(sb_url),

@@ -224,6 +224,80 @@ def init_flet_compatibility():
         ft.Container.__init__ = compat_container_init
         ft.Container._compat_patched = True
 
+    # 15. FilePicker and ServiceRegistry lifecycle stabilization
+    # In Flet 0.86.5, ServiceRegistry.unregister_services drops services whose refcount <= 4.
+    # On Python 3.11/3.12/3.13, this prematurely purges FilePicker on event completion (after_event),
+    # causing handle_invoke_method_results to fail with 'Control is not registered', which dispatches
+    # SESSION_CRASHED and reloads the mobile browser page.
+    try:
+        from flet.controls.page import ServiceRegistry
+        if not getattr(ServiceRegistry, "_compat_patched", False):
+            def safe_unregister_services(self):
+                # Do not drop active services; keep FilePicker alive for the entire session
+                pass
+            ServiceRegistry.unregister_services = safe_unregister_services
+            ServiceRegistry._compat_patched = True
+    except Exception:
+        pass
+
+    # 16. Session.handle_invoke_method_results crash prevention
+    # Ensures pending method calls (e.g. pick_files, upload) resolve gracefully without terminating WebSocket.
+    try:
+        from flet.messaging.session import Session
+        if not getattr(Session, "_compat_patched", False):
+            orig_handle_invoke = Session.handle_invoke_method_results
+            def safe_handle_invoke_method_results(self, control_id: int, call_id: str, result: object, error: object):
+                method_calls = getattr(self, "_Session__method_calls", None)
+                method_results = getattr(self, "_Session__method_call_results", None)
+                if method_calls is not None and call_id in method_calls:
+                    evt = method_calls.pop(call_id, None)
+                    if evt is not None:
+                        if method_results is not None:
+                            method_results[evt] = (result, error)
+                        evt.set()
+                        return
+                try:
+                    orig_handle_invoke(self, control_id, call_id, result, error)
+                except Exception as ex:
+                    import logging
+                    logging.getLogger("flet").warning("Handled invoke method result safely: %s", ex)
+            Session.handle_invoke_method_results = safe_handle_invoke_method_results
+            Session._compat_patched = True
+    except Exception:
+        pass
+
+    # 17. FletApp upload endpoint and secret key configuration
+    import os
+    if not os.getenv("FLET_SECRET_KEY"):
+        secret = os.getenv("APP_SECRET_KEY", "flet-default-upload-secret-key-prod")
+        os.environ["FLET_SECRET_KEY"] = secret
+
+    try:
+        from flet_web.fastapi.flet_app import FletApp
+        if not getattr(FletApp, "_compat_patched", False):
+            orig_flet_app_init = FletApp.__init__
+            def compat_flet_app_init(self, *args, **kwargs):
+                if not kwargs.get("upload_endpoint_path"):
+                    env_up = os.getenv("FLET_UPLOAD_HANDLER_ENDPOINT")
+                    kwargs["upload_endpoint_path"] = "upload" if not env_up else env_up.strip("/")
+                if not kwargs.get("secret_key"):
+                    kwargs["secret_key"] = os.getenv("FLET_SECRET_KEY")
+                orig_flet_app_init(self, *args, **kwargs)
+            FletApp.__init__ = compat_flet_app_init
+
+            orig_on_message = getattr(FletApp, "_FletApp__on_message", None)
+            if orig_on_message:
+                async def safe_on_message(self, data):
+                    try:
+                        await orig_on_message(self, data)
+                    except Exception as ex:
+                        import logging
+                        logging.getLogger("flet").warning("FletApp message loop handled error safely: %s", ex)
+                setattr(FletApp, "_FletApp__on_message", safe_on_message)
+            FletApp._compat_patched = True
+    except Exception:
+        pass
+
 def open_dialog(page: ft.Page, dialog: ft.Control):
     """Reliable helper to open a modal dialog in Flet 0.86+ and earlier versions."""
     if hasattr(page, "show_dialog"):

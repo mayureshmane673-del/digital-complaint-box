@@ -118,10 +118,18 @@ class StorageService:
                 "mime_type": mime_type
             }
 
-            ins_res = client.table("complaint_attachments").insert(attachment_record).execute()
-            if ins_res.data and len(ins_res.data) > 0:
-                return True, "Attachment uploaded successfully.", ins_res.data[0]
-            return True, "Attachment uploaded.", attachment_record
+            try:
+                ins_res = client.table("complaint_attachments").insert(attachment_record).execute()
+                if ins_res.data and len(ins_res.data) > 0:
+                    return True, "Attachment uploaded successfully.", ins_res.data[0]
+                return True, "Attachment uploaded.", attachment_record
+            except Exception as ins_err:
+                # Rollback: delete orphaned storage object if database record fails
+                try:
+                    client.storage.from_(STORAGE_BUCKET).remove([storage_path])
+                except Exception:
+                    pass
+                return False, f"Database attachment record failed: {str(ins_err)}", None
 
         except Exception as e:
             return False, f"Storage upload failed: {str(e)}", None

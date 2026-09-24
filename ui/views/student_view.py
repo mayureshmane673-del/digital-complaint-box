@@ -4,10 +4,14 @@ animated registered vs resolved chart, responsive reflow, loading state preventi
 private anonymous tracking, hostel status, and feedback rating.
 """
 
+import os
+import uuid
+import asyncio
 import weakref
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+from pathlib import Path
 import flet as ft
 
 logger = logging.getLogger("complaint_box.student_view")
@@ -42,20 +46,20 @@ from models.complaint import (
 BASELINE_SUBCATEGORIES = PRACTICAL_SUBCATEGORIES
 
 
-
 class StudentView:
-    def __init__(self, page: ft.Page, student: Dict[str, Any]):
+    def __init__(self, page: ft.Page, student: Dict[str, Any], initial_tab: int = 0):
         self.page = page
         self.student = student
         self.student_id = student["id"]
         self.roll_number = student["roll_number"]
         self.department_id = student["department_id"]
-        self.selected_tab_index = 0
+        self.selected_tab_index = initial_tab
         self.cached_complaints = None
         self.active_container = ft.Container(expand=True)
         self.categories = []
         self.subcategories_by_cat = {}
         self.locations = []
+        self.selected_files: List[Dict[str, Any]] = []
         self.file_picker = ft.FilePicker()
         if hasattr(self.page, "services"):
             if self.file_picker not in self.page.services:
@@ -67,6 +71,11 @@ class StudentView:
                 pass
         try:
             self.file_picker._parent = weakref.ref(self.page)
+        except Exception:
+            pass
+        # Retain strong page reference so GC never purges it
+        try:
+            setattr(self.page, "_student_file_picker", self.file_picker)
         except Exception:
             pass
 
@@ -81,6 +90,11 @@ class StudentView:
 
     def _switch_view(self, index: int):
         self.selected_tab_index = index
+        try:
+            if hasattr(self.page, "session") and self.page.session and hasattr(self.page.session, "store") and self.page.session.store:
+                self.page.session.store.set("active_tab_index", index)
+        except Exception:
+            pass
         if index == 0:
             self.active_container.content = self._render_dashboard()
         elif index == 1:
@@ -440,7 +454,6 @@ class StudentView:
         )
 
         # File picker for attachments (Max 2)
-        selected_files: List[Dict[str, Any]] = []
         files_display = ft.Column(spacing=4)
         attach_btn = ft.ElevatedButton(
             content=ft.Text("Add Attachment (0/2)"),
@@ -448,7 +461,7 @@ class StudentView:
         )
 
         def update_attach_btn():
-            count = len(selected_files)
+            count = len(self.selected_files)
             if count == 0:
                 attach_btn.disabled = False
                 attach_btn.content = ft.Text("Add Attachment (0/2)")
@@ -482,15 +495,22 @@ class StudentView:
             self.page.update()
 
         def remove_file(idx: int):
-            if 0 <= idx < len(selected_files):
-                removed = selected_files.pop(idx)
+            if 0 <= idx < len(self.selected_files):
+                removed = self.selected_files.pop(idx)
+                if removed.get("is_temp") and removed.get("path"):
+                    try:
+                        p = removed["path"]
+                        if os.path.exists(p):
+                            os.remove(p)
+                    except Exception:
+                        pass
                 show_feedback_message(self.page, f"Removed {removed.get('name', 'attachment')}", is_error=False)
                 refresh_files_display()
                 update_attach_btn()
 
         def refresh_files_display():
             files_display.controls.clear()
-            for idx, f in enumerate(selected_files):
+            for idx, f in enumerate(self.selected_files):
                 f_name = f.get("name", "attachment")
                 f_size = f.get("size", 0)
                 size_str = f"{f_size / 1024:.1f} KB" if f_size else ""
@@ -531,7 +551,7 @@ class StudentView:
             self.page.update()
 
         async def on_pick_attachment(e):
-            if len(selected_files) >= 2:
+            if len(self.selected_files) >= 2:
                 show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
                 return
             attach_btn.disabled = True
@@ -543,27 +563,80 @@ class StudentView:
                     file_type=ft.FilePickerFileType.CUSTOM,
                     allowed_extensions=["jpg", "jpeg", "png", "webp", "mp4", "mov", "pdf"],
                     allow_multiple=False,
-                    with_data=True,
-                    compression_quality=70,
+                    with_data=False,
                     cancel_upload_on_window_blur=False
                 )
                 if not files:
                     return
 
                 for f in files:
-                    if len(selected_files) >= 2:
+                    if len(self.selected_files) >= 2:
                         show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
                         break
                     valid, err = validate_attachment(f.name, f.size)
                     if not valid:
                         show_feedback_message(self.page, err, is_error=True)
                         continue
-                    selected_files.append({
-                        "name": f.name,
-                        "bytes": f.bytes,
-                        "path": f.path,
-                        "size": f.size
-                    })
+
+                    # If local desktop file path exists directly
+                    if f.path and os.path.exists(f.path):
+                        self.selected_files.append({
+                            "name": f.name,
+                            "path": f.path,
+                            "bytes": None,
+                            "size": f.size,
+                            "is_temp": False
+                        })
+                    else:
+                        # Web / mobile stream: Upload file to private temp server storage via HTTP PUT
+                        attach_btn.content = ft.Text(f"Attaching {f.name[:12]}...")
+                        self.page.update()
+
+                        ext = os.path.splitext(f.name)[1].lower()
+                        clean_sid = str(self.student_id).replace("-", "")
+                        temp_rel_path = f"temp/{clean_sid}/{uuid.uuid4().hex}{ext}"
+                        upload_url = self.page.get_upload_url(temp_rel_path, 3600)
+
+                        loop = asyncio.get_running_loop()
+                        upload_done = loop.create_future()
+
+                        def on_upload_evt(evt: ft.FilePickerUploadEvent):
+                            if evt.error:
+                                if not upload_done.done():
+                                    upload_done.set_exception(RuntimeError(evt.error))
+                            elif (evt.progress and evt.progress >= 0.99) or getattr(evt, "status", None) == "done":
+                                if not upload_done.done():
+                                    upload_done.set_result(True)
+
+                        self.file_picker.on_upload = on_upload_evt
+                        await self.file_picker.upload([
+                            ft.FilePickerUploadFile(
+                                name=f.name,
+                                id=f.id,
+                                upload_url=upload_url,
+                                method="PUT"
+                            )
+                        ])
+
+                        try:
+                            await asyncio.wait_for(upload_done, timeout=30.0)
+                        except asyncio.TimeoutError:
+                            pass
+
+                        # Resolve disk path
+                        abs_disk_path = os.path.realpath(os.path.join(str(Path("uploads").resolve()), temp_rel_path))
+                        if os.path.exists(abs_disk_path) and os.path.getsize(abs_disk_path) > 0:
+                            self.selected_files.append({
+                                "name": f.name,
+                                "path": abs_disk_path,
+                                "bytes": None,
+                                "size": os.path.getsize(abs_disk_path),
+                                "is_temp": True
+                            })
+                        else:
+                            show_feedback_message(self.page, f"Unable to attach {f.name}. Please try again.", is_error=True)
+                            continue
+
                 refresh_files_display()
             except Exception as ex:
                 logger.warning("Attachment picker error: %s", ex)
@@ -661,7 +734,7 @@ class StudentView:
 
                 if ok and created_comp:
                     cid = created_comp["complaint_id"]
-                    for f_info in selected_files:
+                    for f_info in self.selected_files:
                         try:
                             StorageService.upload_attachment(
                                 complaint_id=cid,
@@ -669,10 +742,17 @@ class StudentView:
                                 original_filename=f_info.get("name"),
                                 file_bytes=f_info.get("bytes")
                             )
-                        except Exception:
-                            pass
+                            # Once stored in Supabase, remove temporary disk copy
+                            if f_info.get("is_temp") and f_info.get("path"):
+                                try:
+                                    if os.path.exists(f_info["path"]):
+                                        os.remove(f_info["path"])
+                                except Exception:
+                                    pass
+                        except Exception as up_err:
+                            logger.error("Error uploading attachment to Supabase: %s", up_err)
 
-                    selected_files.clear()
+                    self.selected_files.clear()
                     show_feedback_message(self.page, f"Complaint #{cid} registered successfully!", is_error=False)
                     self.cached_complaints = None
                     self._switch_view(2)  # Switch to My Complaints

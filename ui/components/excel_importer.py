@@ -33,6 +33,10 @@ def show_excel_importer_dialog(
         file_picker._parent = weakref.ref(page)
     except Exception:
         pass
+    try:
+        setattr(page, "_importer_file_picker", file_picker)
+    except Exception:
+        pass
     page.update()
 
     selected_file_info = [None]
