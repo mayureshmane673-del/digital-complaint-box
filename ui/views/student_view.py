@@ -61,10 +61,15 @@ class StudentView:
         self.locations = []
         self.selected_files: List[Dict[str, Any]] = []
         self.file_picker = ft.FilePicker()
+        # Register in both the root view services list AND the ServiceRegistry.
+        # The services list placement ensures the control is in the tree for
+        # rendering. The ServiceRegistry registration ensures invoke_method
+        # works for pick_files/upload calls.
         if hasattr(self.page, "services"):
             if self.file_picker not in self.page.services:
                 self.page.services.append(self.file_picker)
-        elif hasattr(self.page, "_services"):
+        # Always ensure ServiceRegistry registration (critical for mobile)
+        if hasattr(self.page, "_services") and hasattr(self.page._services, "register_service"):
             try:
                 self.page._services.register_service(self.file_picker)
             except Exception:
@@ -88,6 +93,35 @@ class StudentView:
         self._switch_view(self.selected_tab_index)
         return self.active_container
 
+    def _create_dashboard_skeleton(self) -> ft.Control:
+        """Lightweight loading skeleton shown while dashboard data loads."""
+        is_dark = AppState.is_dark_mode
+        colors = get_theme_colors(is_dark)
+        placeholder_color = colors.get("surface_variant", "#f1f5f9")
+        return ft.Column(
+            controls=[
+                ft.Text("Dashboard", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                ft.Row(
+                    controls=[
+                        ft.Container(width=140, height=80, bgcolor=placeholder_color, border_radius=12)
+                        for _ in range(4)
+                    ],
+                    wrap=True, spacing=12
+                ),
+                ft.Container(
+                    content=ft.Row(
+                        controls=[
+                            ft.ProgressRing(width=24, height=24, stroke_width=3, color=colors["primary"]),
+                            ft.Text("Loading your complaints...", size=14, color=colors["text_muted"])
+                        ],
+                        spacing=12
+                    ),
+                    padding=24
+                )
+            ],
+            spacing=14, expand=True
+        )
+
     def _switch_view(self, index: int):
         self.selected_tab_index = index
         try:
@@ -96,6 +130,16 @@ class StudentView:
         except Exception:
             pass
         if index == 0:
+            # Show skeleton immediately, then load dashboard data
+            if self.cached_complaints is None:
+                self.active_container.content = self._create_dashboard_skeleton()
+                self.page.update()
+                # Fetch data then render real dashboard
+                self.cached_complaints = ComplaintService.get_complaints_for_user(
+                    role="Student",
+                    user_id=self.student_id,
+                    department_id=self.department_id
+                )
             self.active_container.content = self._render_dashboard()
         elif index == 1:
             self.active_container.content = self._render_new_complaint()
@@ -122,6 +166,9 @@ class StudentView:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
+        # Use cached complaints if available, otherwise fetch inline (fast path
+        # after first load). For the very first load the data is fetched once
+        # here; subsequent tab switches reuse self.cached_complaints.
         if self.cached_complaints is None:
             self.cached_complaints = ComplaintService.get_complaints_for_user(
                 role="Student",
@@ -455,9 +502,12 @@ class StudentView:
 
         # File picker for attachments (Max 2)
         files_display = ft.Column(spacing=4)
+        init_count = len(self.selected_files)
+        attach_label = "Add Attachment (0/2)" if init_count == 0 else ("Add Another Attachment (1/2)" if init_count == 1 else "Maximum 2 Attachments Added")
         attach_btn = ft.ElevatedButton(
-            content=ft.Text("Add Attachment (0/2)"),
-            icon=ft.Icons.ATTACH_FILE
+            content=ft.Text(attach_label),
+            icon=ft.Icons.ATTACH_FILE,
+            disabled=(init_count >= 2)
         )
 
         def update_attach_btn():
@@ -508,7 +558,7 @@ class StudentView:
                 refresh_files_display()
                 update_attach_btn()
 
-        def refresh_files_display():
+        def refresh_files_display(update_page: bool = True):
             files_display.controls.clear()
             for idx, f in enumerate(self.selected_files):
                 f_name = f.get("name", "attachment")
@@ -548,7 +598,15 @@ class StudentView:
                         border=ft.Border.all(1, colors["border"])
                     )
                 )
-            self.page.update()
+            if update_page:
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+
+        # Populate pre-existing attachments if any
+        if self.selected_files:
+            refresh_files_display(update_page=False)
 
         async def on_pick_attachment(e):
             if len(self.selected_files) >= 2:
@@ -597,16 +655,18 @@ class StudentView:
                         temp_rel_path = f"temp/{clean_sid}/{uuid.uuid4().hex}{ext}"
                         upload_url = self.page.get_upload_url(temp_rel_path, 3600)
 
-                        loop = asyncio.get_running_loop()
-                        upload_done = loop.create_future()
+                        # Track upload state with a simple mutable flag instead of
+                        # a Future. On mobile browsers the WebSocket can briefly
+                        # disconnect when the file-picker overlay appears, which
+                        # makes Future-based tracking unreliable.
+                        upload_state = {"done": False, "error": None}
 
                         def on_upload_evt(evt: ft.FilePickerUploadEvent):
                             if evt.error:
-                                if not upload_done.done():
-                                    upload_done.set_exception(RuntimeError(evt.error))
-                            elif (evt.progress and evt.progress >= 0.99) or getattr(evt, "status", None) == "done":
-                                if not upload_done.done():
-                                    upload_done.set_result(True)
+                                upload_state["error"] = evt.error
+                                upload_state["done"] = True
+                            elif (evt.progress is not None and evt.progress >= 0.99) or getattr(evt, "status", None) == "done":
+                                upload_state["done"] = True
 
                         self.file_picker.on_upload = on_upload_evt
                         await self.file_picker.upload([
@@ -618,13 +678,20 @@ class StudentView:
                             )
                         ])
 
-                        try:
-                            await asyncio.wait_for(upload_done, timeout=30.0)
-                        except asyncio.TimeoutError:
-                            pass
-
-                        # Resolve disk path
+                        # Poll for completion: check both callback flag AND disk
+                        # file presence. This survives WebSocket reconnects.
                         abs_disk_path = os.path.realpath(os.path.join(str(Path("uploads").resolve()), temp_rel_path))
+                        for _poll in range(60):  # up to 30 seconds
+                            if os.path.exists(abs_disk_path) and os.path.getsize(abs_disk_path) > 0:
+                                break
+                            if upload_state.get("error"):
+                                break
+                            await asyncio.sleep(0.5)
+
+                        # Check upload result
+                        if upload_state.get("error"):
+                            show_feedback_message(self.page, f"Upload error: {upload_state['error']}", is_error=True)
+                            continue
                         if os.path.exists(abs_disk_path) and os.path.getsize(abs_disk_path) > 0:
                             self.selected_files.append({
                                 "name": f.name,

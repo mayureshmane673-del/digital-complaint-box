@@ -258,6 +258,8 @@ def main(page: ft.Page):
 UPLOADS_DIR = ROOT_DIR / "uploads"
 TEMP_UPLOADS_DIR = UPLOADS_DIR / "temp"
 TEMP_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_IMPORTS_DIR = TEMP_UPLOADS_DIR / "imports"
+TEMP_IMPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Export ASGI application for production Uvicorn / Render Web deployment
 app = ft.run(main=main, export_asgi_app=True, upload_dir="uploads")
@@ -295,7 +297,7 @@ def api_health():
     sb_host = urlparse(sb_url).netloc if sb_url else ""
     return {
         "status": "healthy",
-        "version": "v1.0.7-mobile-attachment-fix",
+        "version": "v1.0.8-mobile-perf-polish",
         "supabase_hostname": sb_host,
         "env_configured": {
             "SUPABASE_URL": bool(sb_url),
@@ -338,7 +340,7 @@ def api_diagnostics_subcategories():
 
     return {
         "status": "ok",
-        "version": "v1.0.6-perf-mobile-live",
+        "version": "v1.0.8-mobile-perf-polish",
         "total_categories": len(cats),
         "total_locations": len(locs),
         "test_categories": test_results
@@ -364,7 +366,7 @@ def api_auth_check():
     client = get_trusted_backend_client()
 
     report = {
-        "version": "v1.0.6-perf-mobile-live",
+        "version": "v1.0.8-mobile-perf-polish",
         "supabase_hostname": sb_host,
         "env_status": {
             "SUPABASE_URL_SET": bool(sb_url),

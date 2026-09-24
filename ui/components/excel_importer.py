@@ -2,7 +2,11 @@
 ui/components/excel_importer.py: Coordinator Excel/CSV batch roll number importer with metrics summary.
 """
 
+import os
+import uuid
+import asyncio
 import weakref
+from pathlib import Path
 from typing import Callable, Optional
 import flet as ft
 from services.roll_number_service import RollNumberService
@@ -24,7 +28,7 @@ def show_excel_importer_dialog(
     if hasattr(page, "services"):
         if file_picker not in page.services:
             page.services.append(file_picker)
-    elif hasattr(page, "_services"):
+    if hasattr(page, "_services") and hasattr(page._services, "register_service"):
         try:
             page._services.register_service(file_picker)
         except Exception:
@@ -47,7 +51,7 @@ def show_excel_importer_dialog(
                 file_type=ft.FilePickerFileType.CUSTOM,
                 allowed_extensions=["xlsx", "xls", "csv"],
                 allow_multiple=False,
-                with_data=True,
+                with_data=False,
                 cancel_upload_on_window_blur=False
             )
             if not files or len(files) == 0:
@@ -79,11 +83,68 @@ def show_excel_importer_dialog(
                 page.update()
                 return
 
-            selected_file_info[0] = {
-                "name": f.name,
-                "bytes": f.bytes,
-                "path": f.path
-            }
+            # Desktop: use direct file path if available
+            if f.path and os.path.exists(f.path):
+                selected_file_info[0] = {
+                    "name": f.name,
+                    "bytes": None,
+                    "path": f.path,
+                    "is_temp": False
+                }
+            else:
+                # Web/Mobile: upload via HTTP PUT (avoids with_data memory issue)
+                selected_path.value = f"Uploading {f.name}..."
+                selected_path.italic = False
+                selected_path.color = COLOR_PRIMARY
+                page.update()
+
+                ext = os.path.splitext(f.name)[1].lower()
+                temp_rel_path = f"temp/imports/{uuid.uuid4().hex}{ext}"
+                upload_url = page.get_upload_url(temp_rel_path, 3600)
+
+                upload_state = {"done": False, "error": None}
+
+                def on_upload_evt(evt: ft.FilePickerUploadEvent):
+                    if evt.error:
+                        upload_state["error"] = evt.error
+                        upload_state["done"] = True
+                    elif (evt.progress is not None and evt.progress >= 0.99) or getattr(evt, "status", None) == "done":
+                        upload_state["done"] = True
+
+                file_picker.on_upload = on_upload_evt
+                await file_picker.upload([
+                    ft.FilePickerUploadFile(
+                        name=f.name,
+                        id=f.id,
+                        upload_url=upload_url,
+                        method="PUT"
+                    )
+                ])
+
+                abs_disk_path = os.path.realpath(os.path.join(str(Path("uploads").resolve()), temp_rel_path))
+                for _poll in range(60):
+                    if os.path.exists(abs_disk_path) and os.path.getsize(abs_disk_path) > 0:
+                        break
+                    if upload_state.get("error"):
+                        break
+                    await asyncio.sleep(0.5)
+
+                if upload_state.get("error") or not os.path.exists(abs_disk_path):
+                    selected_file_info[0] = None
+                    selected_path.value = f"Upload failed for {f.name}. Please try again."
+                    selected_path.italic = False
+                    selected_path.color = "#dc2626"
+                    import_btn.disabled = True
+                    page.update()
+                    return
+
+                selected_file_info[0] = {
+                    "name": f.name,
+                    "bytes": None,
+                    "path": abs_disk_path,
+                    "is_temp": True
+                }
+
             display_name = f.name
             selected_path.value = f"Selected: {display_name}"
             selected_path.italic = False
@@ -103,14 +164,29 @@ def show_excel_importer_dialog(
         page.update()
 
         info = selected_file_info[0]
+
+        # Read bytes from disk path for upload-based flow
+        file_bytes_val = info.get("bytes")
+        file_path_val = info.get("path")
+        if not file_bytes_val and file_path_val and os.path.exists(file_path_val):
+            with open(file_path_val, "rb") as fp:
+                file_bytes_val = fp.read()
+
         summary = RollNumberService.import_excel_roll_numbers(
             coordinator_role=coordinator_role,
             coordinator_dept_id=coordinator_dept_id,
             coordinator_id=coordinator_id,
-            file_path=info.get("path"),
-            file_bytes=info.get("bytes"),
+            file_path=file_path_val,
+            file_bytes=file_bytes_val,
             file_name=info.get("name")
         )
+
+        # Clean up temp file if it was uploaded via HTTP
+        if info.get("is_temp") and file_path_val and os.path.exists(file_path_val):
+            try:
+                os.remove(file_path_val)
+            except Exception:
+                pass
 
         import_btn.disabled = False
         import_btn.text = "Import File"

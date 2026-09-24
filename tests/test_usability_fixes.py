@@ -321,5 +321,5 @@ def test_api_health_version():
     from app import api_health
     health = api_health()
     assert health["status"] == "healthy"
-    assert health["version"] == "v1.0.7-mobile-attachment-fix"
+    assert health["version"] == "v1.0.8-mobile-perf-polish"
 
