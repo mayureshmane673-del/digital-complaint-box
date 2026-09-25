@@ -29,20 +29,20 @@ def test_login_button_loading_state_and_duplicate_prevention():
 
 
 def test_mobile_pick_files_blur_setting():
-    """Verify that student view uses mobile-resilient on_result callback attachment pattern.
+    """Verify that student view uses mobile-resilient attachment picker configuration.
 
-    As of v1.0.9, the attachment picker uses:
+    As of v1.1.0, the attachment picker uses:
+    - cancel_upload_on_window_blur=False (prevents Android window blur from cancelling selection)
     - page-level persistent FilePicker (_dcb_file_picker)
-    - on_result callback instead of blocking await
     - page-level selected_files (_dcb_selected_files) that survive reconnects
-    These replace the old cancel_upload_on_window_blur approach.
+    - with_data=False and allow_multiple=False to prevent mobile RAM bloat
     """
     import inspect
     from ui.views.student_view import StudentView
 
     # Verify mobile-resilient architecture is in place
     st_src = inspect.getsource(StudentView._render_new_complaint)
-    assert "on_result" in st_src, "Must use on_result callback (not await) for mobile resilience"
+    assert "cancel_upload_on_window_blur=False" in st_src, "Must disable window blur cancellation for mobile file picker"
     assert "_dcb_selected_files" in st_src, "Must use page-level persistent selected_files"
     assert "allow_multiple=False" in st_src, "Must enforce single-file selection"
     assert "with_data=False" in st_src, "Must use with_data=False to avoid memory bloat"
@@ -292,8 +292,7 @@ def test_mobile_attachment_memory_settings():
     src = inspect.getsource(StudentView._render_new_complaint)
     assert "allow_multiple=False" in src
     assert "with_data=False" in src
-    # v1.0.9+: cancel_upload_on_window_blur is replaced by on_result callback pattern
-    assert "on_result" in src, "Must use on_result callback for mobile resilience"
+    assert "cancel_upload_on_window_blur=False" in src, "Must have cancel_upload_on_window_blur=False for Android mobile support"
     assert "Add Attachment (0/2)" in src
     assert "Maximum 2 Attachments Added" in src
 
@@ -333,5 +332,5 @@ def test_api_health_version():
     from app import api_health
     health = api_health()
     assert health["status"] == "healthy"
-    assert health["version"] == "v1.0.9-feedback-attachment-fix"
+    assert health["version"] == "v1.1.0-mobile-attachment-feedback-flow"
 

@@ -101,3 +101,143 @@ def test_feedback_edit_count_tamper_prevention():
         assert "only be edited once" in msg
 
 
+def test_feedback_v2_department_authorization():
+    """Verify submit_feedback_v2 allows same-dept students and rejects other-dept students."""
+    from services.feedback_service import FeedbackService
+    from unittest.mock import patch, MagicMock
+
+    cse_dept = "dept-cse-111"
+    aids_dept = "dept-aids-222"
+
+    with patch("services.feedback_service.get_trusted_backend_client") as mock_client:
+        mock_backend = MagicMock()
+        mock_client.return_value = mock_backend
+
+        # Mock student: CSE student
+        def mock_table(name):
+            t = MagicMock()
+            if name == "students":
+                t.select.return_value.eq.return_value.execute.return_value.data = [
+                    {"id": "st-cse-1", "department_id": cse_dept, "is_hostel_approved": False, "is_locked": False}
+                ]
+            elif name == "complaints":
+                t.select.return_value.eq.return_value.execute.return_value.data = [
+                    {"complaint_id": 104, "status": "Resolved", "is_deleted": False, "department_id": cse_dept, "is_hostel": False, "categories": {"name": "Electricity"}}
+                ]
+            elif name == "feedback":
+                # No prior feedback
+                t.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+                t.insert.return_value.execute.return_value.data = [{"id": "fb-new", "rating": 5}]
+            return t
+
+        mock_backend.table = mock_table
+
+        # 1. CSE student submits on CSE complaint -> Allowed
+        ok, msg, fb = FeedbackService.submit_feedback_v2(
+            student_id="st-cse-1",
+            department_id=cse_dept,
+            complaint_id=104,
+            rating=5,
+            comment="Great work"
+        )
+        assert ok is True
+        assert "Thank you" in msg
+
+        # 2. AIDS student submits on CSE complaint -> Blocked
+        def mock_table_aids(name):
+            t = MagicMock()
+            if name == "students":
+                t.select.return_value.eq.return_value.execute.return_value.data = [
+                    {"id": "st-aids-1", "department_id": aids_dept, "is_hostel_approved": False, "is_locked": False}
+                ]
+            elif name == "complaints":
+                t.select.return_value.eq.return_value.execute.return_value.data = [
+                    {"complaint_id": 104, "status": "Resolved", "is_deleted": False, "department_id": cse_dept, "is_hostel": False, "categories": {"name": "Electricity"}}
+                ]
+            elif name == "feedback":
+                t.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+            return t
+
+        mock_backend.table = mock_table_aids
+
+        ok, msg, fb = FeedbackService.submit_feedback_v2(
+            student_id="st-aids-1",
+            department_id=aids_dept,
+            complaint_id=104,
+            rating=5
+        )
+        assert ok is False
+        assert "not eligible" in msg.lower()
+
+
+def test_feedback_v2_hostel_and_library_rules():
+    """Verify hostel approved requirement and library campus-wide access in submit_feedback_v2."""
+    from services.feedback_service import FeedbackService
+    from unittest.mock import patch, MagicMock
+
+    with patch("services.feedback_service.get_trusted_backend_client") as mock_client:
+        mock_backend = MagicMock()
+        mock_client.return_value = mock_backend
+
+        # Case 1: Non-approved hostel student submits on hostel complaint -> Blocked
+        def mock_tbl_hostel_non_app(name):
+            t = MagicMock()
+            if name == "students":
+                t.select.return_value.eq.return_value.execute.return_value.data = [
+                    {"id": "st-1", "department_id": "dept-1", "is_hostel_approved": False, "is_locked": False}
+                ]
+            elif name == "complaints":
+                t.select.return_value.eq.return_value.execute.return_value.data = [
+                    {"complaint_id": 130, "status": "Resolved", "is_deleted": False, "department_id": "dept-1", "is_hostel": True, "categories": {"name": "Hostel"}}
+                ]
+            elif name == "feedback":
+                t.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+            return t
+
+        mock_backend.table = mock_tbl_hostel_non_app
+        ok, msg, _ = FeedbackService.submit_feedback_v2("st-1", "dept-1", 130, 4)
+        assert ok is False
+        assert "hostel" in msg.lower()
+
+        # Case 2: Approved hostel student submits on hostel complaint -> Allowed
+        def mock_tbl_hostel_app(name):
+            t = MagicMock()
+            if name == "students":
+                t.select.return_value.eq.return_value.execute.return_value.data = [
+                    {"id": "st-1", "department_id": "dept-1", "is_hostel_approved": True, "is_locked": False}
+                ]
+            elif name == "complaints":
+                t.select.return_value.eq.return_value.execute.return_value.data = [
+                    {"complaint_id": 130, "status": "Resolved", "is_deleted": False, "department_id": "dept-1", "is_hostel": True, "categories": {"name": "Hostel"}}
+                ]
+            elif name == "feedback":
+                t.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+                t.insert.return_value.execute.return_value.data = [{"id": "fb-h", "rating": 4}]
+            return t
+
+        mock_backend.table = mock_tbl_hostel_app
+        ok, msg, _ = FeedbackService.submit_feedback_v2("st-1", "dept-1", 130, 4)
+        assert ok is True
+
+        # Case 3: Any student submits on Library complaint -> Allowed
+        def mock_tbl_lib(name):
+            t = MagicMock()
+            if name == "students":
+                t.select.return_value.eq.return_value.execute.return_value.data = [
+                    {"id": "st-2", "department_id": "dept-2", "is_hostel_approved": False, "is_locked": False}
+                ]
+            elif name == "complaints":
+                t.select.return_value.eq.return_value.execute.return_value.data = [
+                    {"complaint_id": 121, "status": "Resolved", "is_deleted": False, "department_id": "dept-1", "is_hostel": False, "categories": {"name": "Library"}}
+                ]
+            elif name == "feedback":
+                t.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+                t.insert.return_value.execute.return_value.data = [{"id": "fb-lib", "rating": 5}]
+            return t
+
+        mock_backend.table = mock_tbl_lib
+        ok, msg, _ = FeedbackService.submit_feedback_v2("st-2", "dept-2", 121, 5)
+        assert ok is True
+
+
+

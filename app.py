@@ -297,7 +297,7 @@ def api_health():
     sb_host = urlparse(sb_url).netloc if sb_url else ""
     return {
         "status": "healthy",
-        "version": "v1.0.9-feedback-attachment-fix",
+        "version": "v1.1.0-mobile-attachment-feedback-flow",
         "supabase_hostname": sb_host,
         "env_configured": {
             "SUPABASE_URL": bool(sb_url),

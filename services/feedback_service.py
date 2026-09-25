@@ -4,7 +4,7 @@ services/feedback_service.py: Feedback system for Resolved complaints with 1-to-
 
 from typing import Tuple, Optional, Dict, Any, List
 from datetime import datetime
-from database.supabase_client import get_supabase_client
+from database.supabase_client import get_supabase_client, get_trusted_backend_client
 from utils.security import verify_password
 from models.user import UserRole
 from models.complaint import ComplaintStatus
@@ -164,53 +164,41 @@ class FeedbackService:
     ) -> List[Dict[str, Any]]:
         """
         Returns ALL resolved complaints that this student is eligible to give
-        feedback on, based on their department (and hostel status).
+        feedback on, based on their department, hostel status, and library rules.
 
         Business rules:
         - For academic (non-hostel, non-library) complaints:
             Show resolved complaints whose department_id matches the student's
             department_id. The student does NOT need to be the original complainant.
         - For hostel complaints:
-            Show resolved hostel complaints only if the student is an approved
+            Show resolved hostel complaints if the student is an approved
             hostel resident (is_hostel_approved=True).
         - Library complaints:
-            NOT shown to regular students via the feedback tab.
-            Library Incharge handles library feedback via the staff view.
+            Available to all enrolled students across campus.
         - is_deleted=True complaints are never shown.
-
-        The UNIQUE(student_id, complaint_id) constraint in the feedback table
-        still allows multiple *different* students to submit feedback for the
-        same complaint — one record per student per complaint.
         """
-        from database.supabase_client import get_trusted_backend_client
         client = get_trusted_backend_client()
 
         try:
-            # Fetch resolved, non-deleted complaints for this department
-            query = (
+            # Fetch resolved, non-deleted complaints
+            res = (
                 client.table("complaints")
                 .select(
                     "complaint_id, title, description, status, priority, is_hostel, "
                     "is_anonymous, created_at, updated_at, resolved_at, "
                     "department_id, category_id, subcategory_id, location_id, "
                     "location_custom, category_custom, subcategory_custom, "
+                    "resolution_remarks, "
                     "departments(code, name), categories(name), "
                     "subcategories(name), locations(name)"
                 )
                 .eq("status", ComplaintStatus.RESOLVED.value)
                 .eq("is_deleted", False)
                 .order("resolved_at", desc=True)
+                .execute()
             )
-
-            # Filter by department (academic complaints)
-            if department_id:
-                query = query.eq("department_id", department_id)
-
-            res = query.execute()
             raw = res.data or []
 
-            # Post-filter: exclude hostel complaints unless student is approved,
-            # and exclude library complaints from the student feedback view.
             results = []
             for item in raw:
                 c_is_hostel = item.get("is_hostel", False)
@@ -218,16 +206,19 @@ class FeedbackService:
                 cat_name = (cat_obj.get("name", "") if isinstance(cat_obj, dict) else "").strip().lower()
                 cat_custom = (item.get("category_custom") or "").strip().lower()
                 is_lib = (cat_name == "library") or (cat_custom == "library")
+                c_dept = str(item.get("department_id", ""))
 
                 if is_lib:
-                    # Library feedback is handled by Library Incharge, not students
-                    continue
-
-                if c_is_hostel and not is_hostel_student:
-                    # Hostel complaints only visible to approved hostel residents
-                    continue
-
-                results.append(item)
+                    # Library complaints are campus-wide: all students can view & rate
+                    results.append(item)
+                elif c_is_hostel:
+                    # Hostel complaints visible to approved hostel residents
+                    if is_hostel_student:
+                        results.append(item)
+                else:
+                    # Academic department complaints: match student's department
+                    if department_id and c_dept == str(department_id):
+                        results.append(item)
 
             return results
 
@@ -242,10 +233,8 @@ class FeedbackService:
     def get_student_feedback_complaint_ids(cls, student_id: str) -> set:
         """
         Returns a set of complaint_ids for which this student has already
-        submitted feedback. Used to show 'Submitted' vs 'Pending' badges
-        without querying feedback status for each complaint individually.
+        submitted feedback.
         """
-        from database.supabase_client import get_trusted_backend_client
         client = get_trusted_backend_client()
         try:
             res = (
@@ -257,6 +246,26 @@ class FeedbackService:
             return {row["complaint_id"] for row in (res.data or [])}
         except Exception:
             return set()
+
+    @classmethod
+    def get_student_feedback(cls, student_id: str, complaint_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves the feedback record submitted by a specific student for a specific complaint.
+        """
+        client = get_trusted_backend_client()
+        try:
+            res = (
+                client.table("feedback")
+                .select("id, complaint_id, student_id, rating, comment, edit_count, created_at, updated_at")
+                .eq("student_id", student_id)
+                .eq("complaint_id", complaint_id)
+                .execute()
+            )
+            if res.data and len(res.data) > 0:
+                return res.data[0]
+            return None
+        except Exception:
+            return None
 
     @classmethod
     def submit_feedback_v2(
@@ -275,7 +284,10 @@ class FeedbackService:
         1. Rating must be 1-5.
         2. Complaint must exist, be Resolved, and not deleted.
         3. The complaint must belong to a department/scope the student is
-           eligible for (department_id match, or hostel eligibility).
+           eligible for:
+           - Library: any student is eligible
+           - Hostel: student must have is_hostel_approved == True
+           - Academic: student's department_id must match complaint's department_id
         4. The student must not have already submitted feedback (UNIQUE constraint).
 
         Multiple different students from the same eligible department can each
@@ -284,7 +296,6 @@ class FeedbackService:
         if not (1 <= rating <= 5):
             return False, "Rating must be between 1 and 5 stars.", None
 
-        from database.supabase_client import get_trusted_backend_client
         client = get_trusted_backend_client()
 
         try:
@@ -324,16 +335,15 @@ class FeedbackService:
             is_lib = (cat_name == "library") or (cat_custom == "library")
 
             if is_lib:
-                return False, "Library complaint feedback is handled through the Library Incharge.", None
-
-            if c_is_hostel:
+                # Library complaints: campus-wide, all students eligible
+                pass
+            elif c_is_hostel:
                 if not st.get("is_hostel_approved"):
                     return False, "Only approved hostel residents can give feedback on hostel complaints.", None
             else:
                 # Academic department: must match the complaint's department
                 if department_id and c_dept != str(department_id):
                     return False, "You are not eligible to give feedback on complaints from another department.", None
-                # Also verify via student's stored department_id
                 if str(st.get("department_id", "")) != c_dept:
                     return False, "You are not eligible to give feedback on complaints from another department.", None
 
@@ -364,3 +374,4 @@ class FeedbackService:
             if "unique" in err_str.lower() or "duplicate" in err_str.lower():
                 return False, "You have already submitted feedback for this complaint.", None
             return False, f"Failed to submit feedback: {err_str}", None
+
