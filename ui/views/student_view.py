@@ -6,7 +6,7 @@ private anonymous tracking, hostel status, and feedback rating.
 
 import os
 import uuid
-import asyncio
+
 import weakref
 import logging
 from typing import Dict, Any, Optional, List
@@ -59,16 +59,32 @@ class StudentView:
         self.categories = []
         self.subcategories_by_cat = {}
         self.locations = []
-        self.selected_files: List[Dict[str, Any]] = []
-        self.file_picker = ft.FilePicker()
-        # Register in both the root view services list AND the ServiceRegistry.
-        # The services list placement ensures the control is in the tree for
-        # rendering. The ServiceRegistry registration ensures invoke_method
-        # works for pick_files/upload calls.
+
+        # --- MOBILE-RESILIENT ATTACHMENT ARCHITECTURE ---
+        # selected_files is stored on the PAGE object (not self) so it persists
+        # across StudentView recreations caused by Android WebSocket reconnects.
+        # On reconnect, app.py calls render_portal_view() → new StudentView(),
+        # but page object is the same, so _dcb_selected_files is preserved.
+        if not hasattr(self.page, "_dcb_selected_files"):
+            self.page._dcb_selected_files = []
+
+        # Reuse the existing page-level FilePicker if available.
+        # On Android, a reconnect creates a new StudentView but the old picker
+        # may still be registered. We always reuse a single picker per page
+        # session to avoid orphaned pickers piling up in page.services.
+        existing_picker = getattr(self.page, "_dcb_file_picker", None)
+        if existing_picker is not None:
+            # Re-use the existing picker — it is already registered.
+            self.file_picker = existing_picker
+        else:
+            self.file_picker = ft.FilePicker()
+            self.page._dcb_file_picker = self.file_picker
+
+        # Ensure picker is in page.services (register only once).
         if hasattr(self.page, "services"):
             if self.file_picker not in self.page.services:
                 self.page.services.append(self.file_picker)
-        # Always ensure ServiceRegistry registration (critical for mobile)
+        # Also register with ServiceRegistry (required for mobile invoke_method).
         if hasattr(self.page, "_services") and hasattr(self.page._services, "register_service"):
             try:
                 self.page._services.register_service(self.file_picker)
@@ -78,11 +94,11 @@ class StudentView:
             self.file_picker._parent = weakref.ref(self.page)
         except Exception:
             pass
-        # Retain strong page reference so GC never purges it
-        try:
-            setattr(self.page, "_student_file_picker", self.file_picker)
-        except Exception:
-            pass
+
+        # Picker-pending flag: tracks whether a pick_files() call is in flight.
+        # Stored on page so reconnect-rebuilt StudentViews can detect a pending op.
+        if not hasattr(self.page, "_dcb_picker_pending"):
+            self.page._dcb_picker_pending = False
 
     def _ensure_reference_data_loaded(self):
         if not self.categories:
@@ -501,27 +517,43 @@ class StudentView:
         )
 
         # File picker for attachments (Max 2)
+        # Use the page-level selected_files so state survives Android WebSocket reconnects.
+        # When Android opens the file manager, the WebSocket may briefly disconnect.
+        # app.py will call render_portal_view() which creates a new StudentView,
+        # but page._dcb_selected_files persists the already-selected files.
+        # page._dcb_selected_files is the persistent list (accessed via _get_count() helper below)
+
         files_display = ft.Column(spacing=4)
-        init_count = len(self.selected_files)
-        attach_label = "Add Attachment (0/2)" if init_count == 0 else ("Add Another Attachment (1/2)" if init_count == 1 else "Maximum 2 Attachments Added")
+
+        def _get_count() -> int:
+            return len(self.page._dcb_selected_files)
+
+        def _count_label() -> str:
+            n = _get_count()
+            if n == 0:
+                return "Add Attachment (0/2)"
+            elif n == 1:
+                return "Add Another Attachment (1/2)"
+            return "Maximum 2 Attachments Added"
+
         attach_btn = ft.ElevatedButton(
-            content=ft.Text(attach_label),
+            content=ft.Text(_count_label()),
             icon=ft.Icons.ATTACH_FILE,
-            disabled=(init_count >= 2)
+            disabled=(_get_count() >= 2)
         )
 
         def update_attach_btn():
-            count = len(self.selected_files)
-            if count == 0:
-                attach_btn.disabled = False
-                attach_btn.content = ft.Text("Add Attachment (0/2)")
-            elif count == 1:
-                attach_btn.disabled = False
-                attach_btn.content = ft.Text("Add Another Attachment (1/2)")
-            else:
-                attach_btn.disabled = True
-                attach_btn.content = ft.Text("Maximum 2 Attachments Added")
-            self.page.update()
+            n = _get_count()
+            attach_btn.disabled = (n >= 2)
+            attach_btn.content = ft.Text(_count_label())
+            try:
+                attach_btn.update()
+            except Exception:
+                pass
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
         # In-form alert box
         alert_box = ft.Container(
@@ -545,8 +577,9 @@ class StudentView:
             self.page.update()
 
         def remove_file(idx: int):
-            if 0 <= idx < len(self.selected_files):
-                removed = self.selected_files.pop(idx)
+            pf = self.page._dcb_selected_files
+            if 0 <= idx < len(pf):
+                removed = pf.pop(idx)
                 if removed.get("is_temp") and removed.get("path"):
                     try:
                         p = removed["path"]
@@ -560,7 +593,7 @@ class StudentView:
 
         def refresh_files_display(update_page: bool = True):
             files_display.controls.clear()
-            for idx, f in enumerate(self.selected_files):
+            for idx, f in enumerate(self.page._dcb_selected_files):
                 f_name = f.get("name", "attachment")
                 f_size = f.get("size", 0)
                 size_str = f"{f_size / 1024:.1f} KB" if f_size else ""
@@ -604,111 +637,223 @@ class StudentView:
                 except Exception:
                     pass
 
-        # Populate pre-existing attachments if any
-        if self.selected_files:
+        # Populate pre-existing attachments from persistent page-level list
+        # (handles Android reconnect case where files were already selected)
+        if self.page._dcb_selected_files:
             refresh_files_display(update_page=False)
 
-        async def on_pick_attachment(e):
-            if len(self.selected_files) >= 2:
-                show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
+        # --- NON-BLOCKING CALLBACK-BASED ATTACHMENT PICKER ---
+        #
+        # CRITICAL ARCHITECTURE DECISION:
+        # We do NOT use `await file_picker.pick_files()` (blocking coroutine).
+        # On Android, `pick_files()` opens the native file manager overlay which
+        # causes the WebSocket to briefly disconnect. The blocking await never
+        # resolves because the session has reset. Instead we:
+        #   1. Set up an on_result callback BEFORE calling pick_files().
+        #   2. Call pick_files() as fire-and-forget (no await).
+        #   3. The on_result callback fires asynchronously when the file is selected,
+        #      even after a WebSocket reconnect (because the picker is page-level
+        #      and persists across StudentView recreations).
+        #   4. The on_upload callback tracks upload completion and stores the
+        #      attachment in page._dcb_selected_files (persistent across reconnects).
+        #   5. update_attach_btn() and refresh_files_display() are called from
+        #      the callbacks to update whichever UI is currently rendered.
+
+        def _do_attach_upload(f_info, f_name: str, f_size: int):
+            """Upload a web-streamed file to the temp server path and register it."""
+            ext = os.path.splitext(f_name)[1].lower()
+            clean_sid = str(self.student_id).replace("-", "")
+            temp_rel_path = f"temp/{clean_sid}/{uuid.uuid4().hex}{ext}"
+            try:
+                upload_url = self.page.get_upload_url(temp_rel_path, 3600)
+            except Exception as ex:
+                logger.warning("get_upload_url failed: %s", ex)
+                show_feedback_message(self.page, f"Cannot prepare upload for {f_name}.", is_error=True)
+                update_attach_btn()
                 return
-            attach_btn.disabled = True
-            attach_btn.content = ft.Text("Opening Picker...")
-            self.page.update()
+
+            abs_disk_path = os.path.realpath(
+                os.path.join(str(Path("uploads").resolve()), temp_rel_path)
+            )
+
+            upload_done = {"done": False, "error": None}
+
+            def on_upload_progress(evt: ft.FilePickerUploadEvent):
+                """Called by Flet when upload progresses. Fires from the Flet event loop."""
+                if evt.error:
+                    upload_done["error"] = evt.error
+                    upload_done["done"] = True
+                    show_feedback_message(
+                        self.page, f"Upload error for {f_name}: {evt.error}", is_error=True
+                    )
+                    update_attach_btn()
+                elif (
+                    (evt.progress is not None and evt.progress >= 0.99)
+                    or getattr(evt, "status", None) == "done"
+                    or (os.path.exists(abs_disk_path) and os.path.getsize(abs_disk_path) > 0)
+                ):
+                    if not upload_done["done"]:
+                        upload_done["done"] = True
+                        # Fall back to disk check for actual size (progress=1.0 may fire before flush)
+                        actual_size = f_size
+                        if os.path.exists(abs_disk_path):
+                            actual_size = os.path.getsize(abs_disk_path) or f_size
+                        self.page._dcb_selected_files.append({
+                            "name": f_name,
+                            "path": abs_disk_path,
+                            "bytes": None,
+                            "size": actual_size,
+                            "is_temp": True
+                        })
+                        logger.info("[ATTACHMENT] Added '%s' (%.1f KB)", f_name, actual_size / 1024)
+                        refresh_files_display()
+                        update_attach_btn()
+
+            # Attach the upload progress handler to the persistent picker.
+            # Each pick operation overwrites the previous handler — that is safe
+            # because only one upload runs at a time.
+            self.file_picker.on_upload = on_upload_progress
 
             try:
-                files = await self.file_picker.pick_files(
-                    file_type=ft.FilePickerFileType.CUSTOM,
-                    allowed_extensions=["jpg", "jpeg", "png", "webp", "mp4", "mov", "pdf"],
-                    allow_multiple=False,
-                    with_data=False,
-                    cancel_upload_on_window_blur=False
-                )
-                if not files:
-                    return
-
-                for f in files:
-                    if len(self.selected_files) >= 2:
-                        show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
-                        break
-                    valid, err = validate_attachment(f.name, f.size)
-                    if not valid:
-                        show_feedback_message(self.page, err, is_error=True)
-                        continue
-
-                    # If local desktop file path exists directly
-                    if f.path and os.path.exists(f.path):
-                        self.selected_files.append({
-                            "name": f.name,
-                            "path": f.path,
-                            "bytes": None,
-                            "size": f.size,
-                            "is_temp": False
-                        })
-                    else:
-                        # Web / mobile stream: Upload file to private temp server storage via HTTP PUT
-                        attach_btn.content = ft.Text(f"Attaching {f.name[:12]}...")
-                        self.page.update()
-
-                        ext = os.path.splitext(f.name)[1].lower()
-                        clean_sid = str(self.student_id).replace("-", "")
-                        temp_rel_path = f"temp/{clean_sid}/{uuid.uuid4().hex}{ext}"
-                        upload_url = self.page.get_upload_url(temp_rel_path, 3600)
-
-                        # Track upload state with a simple mutable flag instead of
-                        # a Future. On mobile browsers the WebSocket can briefly
-                        # disconnect when the file-picker overlay appears, which
-                        # makes Future-based tracking unreliable.
-                        upload_state = {"done": False, "error": None}
-
-                        def on_upload_evt(evt: ft.FilePickerUploadEvent):
-                            if evt.error:
-                                upload_state["error"] = evt.error
-                                upload_state["done"] = True
-                            elif (evt.progress is not None and evt.progress >= 0.99) or getattr(evt, "status", None) == "done":
-                                upload_state["done"] = True
-
-                        self.file_picker.on_upload = on_upload_evt
-                        await self.file_picker.upload([
-                            ft.FilePickerUploadFile(
-                                name=f.name,
-                                id=f.id,
-                                upload_url=upload_url,
-                                method="PUT"
-                            )
-                        ])
-
-                        # Poll for completion: check both callback flag AND disk
-                        # file presence. This survives WebSocket reconnects.
-                        abs_disk_path = os.path.realpath(os.path.join(str(Path("uploads").resolve()), temp_rel_path))
-                        for _poll in range(60):  # up to 30 seconds
-                            if os.path.exists(abs_disk_path) and os.path.getsize(abs_disk_path) > 0:
-                                break
-                            if upload_state.get("error"):
-                                break
-                            await asyncio.sleep(0.5)
-
-                        # Check upload result
-                        if upload_state.get("error"):
-                            show_feedback_message(self.page, f"Upload error: {upload_state['error']}", is_error=True)
-                            continue
-                        if os.path.exists(abs_disk_path) and os.path.getsize(abs_disk_path) > 0:
-                            self.selected_files.append({
-                                "name": f.name,
-                                "path": abs_disk_path,
-                                "bytes": None,
-                                "size": os.path.getsize(abs_disk_path),
-                                "is_temp": True
-                            })
-                        else:
-                            show_feedback_message(self.page, f"Unable to attach {f.name}. Please try again.", is_error=True)
-                            continue
-
-                refresh_files_display()
+                # fire-and-forget upload (non-blocking)
+                self.file_picker.upload([
+                    ft.FilePickerUploadFile(
+                        name=f_name,
+                        id=getattr(f_info, "id", None) or f_name,
+                        upload_url=upload_url,
+                        method="PUT"
+                    )
+                ])
             except Exception as ex:
-                logger.warning("Attachment picker error: %s", ex)
-                show_feedback_message(self.page, "Unable to select attachment. Please try again.", is_error=True)
-            finally:
+                logger.warning("file_picker.upload() error: %s", ex)
+                show_feedback_message(self.page, f"Upload failed for {f_name}.", is_error=True)
+                update_attach_btn()
+
+        def _on_picker_result(e: ft.FilePickerResultEvent):
+            """Non-blocking on_result callback. Called by Flet from event loop."""
+            # Clear the pending flag so the button can be re-enabled.
+            self.page._dcb_picker_pending = False
+
+            files = getattr(e, "files", None) or []
+            if not files:
+                # User cancelled the picker — just re-enable the button.
+                logger.info("[ATTACHMENT] File picker cancelled or no file selected.")
+                update_attach_btn()
+                return
+
+            for f in files:
+                if _get_count() >= 2:
+                    show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
+                    break
+                f_name = getattr(f, "name", "") or ""
+                f_size = getattr(f, "size", 0) or 0
+
+                valid, err = validate_attachment(f_name, f_size)
+                if not valid:
+                    show_feedback_message(self.page, err, is_error=True)
+                    continue
+
+                f_path = getattr(f, "path", None)
+                if f_path and os.path.exists(f_path):
+                    # Desktop / local path available immediately — no upload needed.
+                    self.page._dcb_selected_files.append({
+                        "name": f_name,
+                        "path": f_path,
+                        "bytes": None,
+                        "size": f_size,
+                        "is_temp": False
+                    })
+                    logger.info("[ATTACHMENT] Desktop file added: %s", f_name)
+                    refresh_files_display()
+                    update_attach_btn()
+                else:
+                    # Web/mobile: must upload via Flet upload endpoint.
+                    # Show interim state on button while upload is in progress.
+                    attach_btn.disabled = True
+                    attach_btn.content = ft.Text(f"Uploading {f_name[:14]}...")
+                    try:
+                        attach_btn.update()
+                    except Exception:
+                        pass
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+                    _do_attach_upload(f, f_name, f_size)
+
+        # Register the non-blocking result callback on the persistent picker.
+        # This callback survives WebSocket reconnects because the picker is page-level.
+        self.file_picker.on_result = _on_picker_result
+
+        def on_pick_attachment(e):
+            """Button click handler — launches the file picker (non-blocking).
+
+            Uses on_result callback pattern instead of awaiting pick_files().
+            This is the correct Flet 0.86.5 mobile approach:
+            - We schedule pick_files() as a task (fire-and-forget).
+            - The result arrives via self.file_picker.on_result callback,
+              which fires even after an Android WebSocket reconnect because
+              the picker is attached to the persistent page-level picker.
+            """
+            if _get_count() >= 2:
+                show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
+                return
+            if getattr(self.page, "_dcb_picker_pending", False):
+                # Prevent double-tap from opening the picker twice.
+                show_feedback_message(self.page, "File picker already open.", is_error=False)
+                return
+
+            self.page._dcb_picker_pending = True
+            attach_btn.disabled = True
+            attach_btn.content = ft.Text("Opening Picker...")
+            try:
+                attach_btn.update()
+            except Exception:
+                pass
+            self.page.update()
+
+            import asyncio
+
+            async def _launch_picker():
+                try:
+                    # In Flet 0.86.5, pick_files() is a coroutine.
+                    # We await it here so the picker actually opens,
+                    # but the on_result callback (not the return value)
+                    # delivers the selected file. This means even if the
+                    # WebSocket reconnects, the on_result will still fire
+                    # for the newly rebuilt StudentView's registered callback.
+                    await self.file_picker.pick_files(
+                        file_type=ft.FilePickerFileType.CUSTOM,
+                        allowed_extensions=["jpg", "jpeg", "png", "webp", "mp4", "mov", "pdf"],
+                        allow_multiple=False,
+                        with_data=False,
+                    )
+                    # NOTE: We intentionally ignore the return value here.
+                    # The result is processed in _on_picker_result (on_result callback).
+                    # If pick_files() returned None (cancelled or reconnected),
+                    # _on_picker_result will have already handled the empty-files case.
+                except Exception as ex:
+                    logger.warning("[ATTACHMENT] pick_files() failed: %s", ex)
+                    self.page._dcb_picker_pending = False
+                    show_feedback_message(self.page, "Unable to open file picker. Please try again.", is_error=True)
+                    update_attach_btn()
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(_launch_picker())
+                else:
+                    # Fallback: call synchronously in desktop mode
+                    self.file_picker.pick_files(
+                        file_type=ft.FilePickerFileType.CUSTOM,
+                        allowed_extensions=["jpg", "jpeg", "png", "webp", "mp4", "mov", "pdf"],
+                        allow_multiple=False,
+                        with_data=False,
+                    )
+            except Exception as ex:
+                logger.warning("[ATTACHMENT] event loop error: %s", ex)
+                self.page._dcb_picker_pending = False
+                show_feedback_message(self.page, "Unable to open file picker. Please try again.", is_error=True)
                 update_attach_btn()
 
         attach_btn.on_click = on_pick_attachment
@@ -801,7 +946,7 @@ class StudentView:
 
                 if ok and created_comp:
                     cid = created_comp["complaint_id"]
-                    for f_info in self.selected_files:
+                    for f_info in self.page._dcb_selected_files:
                         try:
                             StorageService.upload_attachment(
                                 complaint_id=cid,
@@ -819,7 +964,7 @@ class StudentView:
                         except Exception as up_err:
                             logger.error("Error uploading attachment to Supabase: %s", up_err)
 
-                    self.selected_files.clear()
+                    self.page._dcb_selected_files.clear()
                     show_feedback_message(self.page, f"Complaint #{cid} registered successfully!", is_error=False)
                     self.cached_complaints = None
                     self._switch_view(2)  # Switch to My Complaints
@@ -1137,141 +1282,375 @@ class StudentView:
         )
 
     # -------------------------------------------------------------------------
-    # TAB 3: FEEDBACK
+    # TAB 3: FEEDBACK  (Resolved Complaints → Detail → Rate)
     # -------------------------------------------------------------------------
     def _render_feedback(self) -> ft.Control:
+        """
+        Feedback workflow:
+          1. Show ALL resolved complaints for the student's eligible department.
+          2. Student clicks a complaint ID/card to open complaint detail.
+          3. The detail dialog shows full complaint info + the feedback form.
+          4. Eligibility: any student from the complaint's eligible department may
+             give feedback once per complaint. Not restricted to the complainant.
+        """
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        if self.cached_complaints is None:
-            self.cached_complaints = ComplaintService.get_complaints_for_user(
-                role="Student",
-                user_id=self.student_id,
-                department_id=self.department_id
+        # Fetch ALL resolved complaints visible to this student's department.
+        # This is intentionally different from cached_complaints (which is own-only).
+        # We do NOT use cached_complaints here because that query filters by student_id.
+        resolved_complaints = FeedbackService.get_resolved_complaints_for_student(
+            student_id=self.student_id,
+            department_id=self.department_id,
+            is_hostel_student=self.student.get("is_hostel_approved", False)
+        )
+
+        # Get the set of complaint_ids this student has ALREADY given feedback for.
+        my_feedback_ids = FeedbackService.get_student_feedback_complaint_ids(self.student_id)
+
+        def _open_complaint_detail_with_feedback(comp: Dict[str, Any]):
+            """Opens a dialog showing complaint details + feedback form."""
+            cid = comp.get("complaint_id")
+            already_gave = cid in my_feedback_ids
+
+            # --- Complaint detail section ---
+            def _row(label: str, value: str) -> ft.Control:
+                return ft.Row(
+                    controls=[
+                        ft.Text(label + ":", size=12, color=colors["text_muted"], width=110),
+                        ft.Text(str(value or "—"), size=13, color=colors["text"], expand=True)
+                    ],
+                    spacing=6
+                )
+
+            cat_obj = comp.get("categories")
+            cat_name = cat_obj.get("name") if isinstance(cat_obj, dict) else (comp.get("category_custom") or "—")
+            sub_obj = comp.get("subcategories")
+            sub_name = sub_obj.get("name") if isinstance(sub_obj, dict) else (comp.get("subcategory_custom") or "—")
+            loc_obj = comp.get("locations")
+            loc_name = loc_obj.get("name") if isinstance(loc_obj, dict) else (comp.get("location_custom") or "—")
+            dept_obj = comp.get("departments")
+            dept_name = dept_obj.get("name") if isinstance(dept_obj, dict) else "—"
+            resolved_at = (comp.get("resolved_at") or "")[:10] or "—"
+
+            detail_col = ft.Column(
+                controls=[
+                    ft.Container(
+                        content=ft.Text(
+                            f"Complaint #{cid}",
+                            size=16, weight=ft.FontWeight.BOLD, color=colors["primary"]
+                        ),
+                        padding=ft.padding.only(bottom=4)
+                    ),
+                    _row("Title", comp.get("title") or "—"),
+                    _row("Description", (comp.get("description") or "—")[:200]),
+                    _row("Department", dept_name),
+                    _row("Category", cat_name or "—"),
+                    _row("Subcategory", sub_name or "—"),
+                    _row("Location", loc_name),
+                    _row("Priority", comp.get("priority") or "—"),
+                    _row("Created", (comp.get("created_at") or "")[:10] or "—"),
+                    _row("Resolved", resolved_at),
+                    ft.Container(
+                        content=ft.Text("✓ Resolved", size=12, weight=ft.FontWeight.BOLD, color="#059669"),
+                        bgcolor=ft.Colors.with_opacity(0.12, "#059669"),
+                        border_radius=6,
+                        padding=ft.padding.symmetric(horizontal=8, vertical=3)
+                    ),
+                ],
+                spacing=6
             )
-        complaints = [c for c in (self.cached_complaints or []) if c.get("status") == "Resolved"]
 
-        feedback_cards = []
-        for c in complaints:
-            cid = c.get("complaint_id")
-            title = c.get("title")
+            # --- Feedback form section ---
+            if already_gave:
+                feedback_section = ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            ft.Divider(color=colors["border"]),
+                            ft.Row(
+                                controls=[
+                                    ft.Icon(ft.Icons.CHECK_CIRCLE, color="#059669", size=18),
+                                    ft.Text("You have already submitted feedback for this complaint.",
+                                            size=13, color="#059669", weight=ft.FontWeight.W_500)
+                                ],
+                                spacing=8
+                            )
+                        ],
+                        spacing=8
+                    )
+                )
+                dlg_actions = [
+                    ft.TextButton("Close", on_click=lambda _: close_dialog(self.page, detail_dlg))
+                ]
+            else:
+                # Star rating via icon row (1–5)
+                rating_val = [5]  # mutable container
+                star_icons = []
 
-            def open_feedback_dialog(e, comp_id=cid, c_title=title):
-                st_id_field = ft.TextField(label="Confirm Student Roll Number", value=self.roll_number, disabled=True, dense=True)
-                st_pass_field = ft.TextField(label="Enter Account Password", password=True, can_reveal_password=True, dense=True)
-                rating_slider = ft.Slider(min=1, max=5, divisions=4, value=5, label="{value} Stars")
-                rating_text = ft.Text("Rating: 5 / 5 Stars", weight=ft.FontWeight.BOLD, color=colors["text"])
-                comment_field = ft.TextField(label="Comments (Optional)", multiline=True, dense=True)
+                def _build_stars(selected: int) -> List[ft.Control]:
+                    icons = []
+                    for i in range(1, 6):
+                        icons.append(
+                            ft.IconButton(
+                                icon=ft.Icons.STAR if i <= selected else ft.Icons.STAR_BORDER,
+                                icon_color="#f59e0b" if i <= selected else colors["text_muted"],
+                                icon_size=28,
+                                data=i,
+                                on_click=lambda ev, idx=i: _on_star_click(ev, idx)
+                            )
+                        )
+                    return icons
+
+                stars_row = ft.Row(controls=_build_stars(5), spacing=0)
+                rating_label = ft.Text("5 / 5 Stars", size=13, weight=ft.FontWeight.W_600, color="#f59e0b")
+
+                def _on_star_click(ev, idx: int):
+                    rating_val[0] = idx
+                    rating_label.value = f"{idx} / 5 Stars"
+                    stars_row.controls = _build_stars(idx)
+                    try:
+                        stars_row.update()
+                        rating_label.update()
+                    except Exception:
+                        self.page.update()
+
+                comment_field = ft.TextField(
+                    label="Comment (Optional)",
+                    hint_text="Any specific feedback on the resolution...",
+                    multiline=True,
+                    min_lines=2,
+                    max_lines=4,
+                    dense=True
+                )
 
                 submit_fb_btn = ft.ElevatedButton(
-                    content=ft.Text("Submit Rating"),
+                    content=ft.Text("Submit Feedback"),
+                    icon=ft.Icons.SEND,
                     style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
                 )
 
-                def on_slider_change(ev):
-                    rating_text.value = f"Rating: {int(rating_slider.value)} / 5 Stars"
-                    self.page.update()
-
-                rating_slider.on_change = on_slider_change
-
                 def do_submit_feedback(ev):
+                    if rating_val[0] < 1:
+                        show_feedback_message(self.page, "Please select a star rating (1–5).", is_error=True)
+                        return
                     submit_fb_btn.disabled = True
                     submit_fb_btn.content = ft.Text("Submitting...")
                     self.page.update()
 
-                    ok, msg, fb = FeedbackService.submit_feedback(
+                    ok, msg, fb = FeedbackService.submit_feedback_v2(
                         student_id=self.student_id,
-                        roll_number=self.roll_number,
-                        password=st_pass_field.value or "",
-                        complaint_id=comp_id,
-                        rating=int(rating_slider.value),
+                        department_id=self.department_id,
+                        complaint_id=cid,
+                        rating=rating_val[0],
                         comment=comment_field.value
                     )
 
                     submit_fb_btn.disabled = False
-                    submit_fb_btn.content = ft.Text("Submit Rating")
+                    submit_fb_btn.content = ft.Text("Submit Feedback")
 
                     if ok:
                         show_feedback_message(self.page, msg, is_error=False)
-                        close_dialog(self.page, dlg)
-                        self._switch_view(3)
+                        my_feedback_ids.add(cid)
+                        close_dialog(self.page, detail_dlg)
+                        self._switch_view(3)  # Refresh feedback list
                     else:
                         show_feedback_message(self.page, msg, is_error=True)
                         self.page.update()
 
                 submit_fb_btn.on_click = do_submit_feedback
 
-                dlg = ft.AlertDialog(
-                    title=ft.Text(f"Provide Feedback on #{comp_id}", weight=ft.FontWeight.BOLD, color=colors["text"]),
-                    content=ft.Container(
-                        content=ft.Column(
+                feedback_section = ft.Column(
+                    controls=[
+                        ft.Divider(color=colors["border"]),
+                        ft.Text("Give Feedback", size=15, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                        ft.Row(
                             controls=[
-                                ft.Text(f"Issue: {c_title}", size=13, color=colors["text_muted"]),
-                                st_id_field,
-                                st_pass_field,
-                                rating_text,
-                                rating_slider,
-                                comment_field
+                                ft.Text("Rating:", size=13, color=colors["text_muted"]),
+                                stars_row,
+                                rating_label
                             ],
-                            spacing=10
+                            spacing=4,
+                            wrap=True
                         ),
-                        width=460,
-                        height=320
-                    ),
-                    bgcolor=colors["surface"],
-                    actions=[
-                        ft.TextButton("Cancel", on_click=lambda _: close_dialog(self.page, dlg)),
+                        comment_field,
                         submit_fb_btn
-                    ]
+                    ],
+                    spacing=10
                 )
-                open_dialog(self.page, dlg)
+                dlg_actions = [
+                    ft.TextButton("Cancel", on_click=lambda _: close_dialog(self.page, detail_dlg))
+                ]
 
-            feedback_cards.append(
+            detail_dlg = ft.AlertDialog(
+                title=ft.Text(f"Complaint #{cid} — Detail & Feedback",
+                              weight=ft.FontWeight.BOLD, color=colors["text"]),
+                content=ft.Container(
+                    content=ft.Column(
+                        controls=[detail_col, feedback_section],
+                        spacing=8,
+                        scroll=ft.ScrollMode.AUTO
+                    ),
+                    width=520,
+                    height=480
+                ),
+                bgcolor=colors["surface"],
+                actions=dlg_actions
+            )
+            open_dialog(self.page, detail_dlg)
+
+        # --- Build the resolved complaints list ---
+        list_controls: List[ft.Control] = []
+        for comp in resolved_complaints:
+            cid = comp.get("complaint_id")
+            title = comp.get("title") or "—"
+            cat_obj = comp.get("categories")
+            cat_name = cat_obj.get("name") if isinstance(cat_obj, dict) else (comp.get("category_custom") or "—")
+            sub_obj = comp.get("subcategories")
+            sub_name = sub_obj.get("name") if isinstance(sub_obj, dict) else (comp.get("subcategory_custom") or "")
+            dept_obj = comp.get("departments")
+            dept_name = dept_obj.get("name") if isinstance(dept_obj, dict) else "—"
+            resolved_at = (comp.get("resolved_at") or comp.get("updated_at") or "")[:10] or "—"
+            already_gave = cid in my_feedback_ids
+            fb_badge_color = "#059669" if already_gave else "#d97706"
+            fb_badge_text = "Submitted" if already_gave else "Pending"
+
+            list_controls.append(
                 ft.Container(
                     content=ft.Row(
                         controls=[
+                            # Complaint info (clickable)
                             ft.Column(
                                 controls=[
-                                    ft.Text(f"Complaint #{cid}: {title}", size=15, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                                    ft.Text("Status: Resolved", size=12, color="#059669")
+                                    ft.Row(
+                                        controls=[
+                                            ft.TextButton(
+                                                content=ft.Text(
+                                                    f"#{cid}",
+                                                    size=15, weight=ft.FontWeight.BOLD,
+                                                    color=colors["primary"],
+                                                    decoration=ft.TextDecoration.UNDERLINE
+                                                ),
+                                                on_click=lambda _, c=comp: _open_complaint_detail_with_feedback(c),
+                                                style=ft.ButtonStyle(
+                                                    padding=ft.padding.all(0),
+                                                    overlay_color=ft.Colors.TRANSPARENT
+                                                )
+                                            ),
+                                            ft.Text(
+                                                f"  {title[:50]}",
+                                                size=14, weight=ft.FontWeight.W_500,
+                                                color=colors["text"], expand=True
+                                            )
+                                        ],
+                                        spacing=0,
+                                        wrap=True
+                                    ),
+                                    ft.Row(
+                                        controls=[
+                                            ft.Text(cat_name, size=12, color=colors["text_muted"]),
+                                            ft.Text(" · ", size=12, color=colors["text_muted"]),
+                                            ft.Text(sub_name[:25] if sub_name else "", size=12, color=colors["text_muted"]),
+                                            ft.Text(" · ", size=12, color=colors["text_muted"]),
+                                            ft.Text(dept_name, size=12, color=colors["text_muted"]),
+                                            ft.Text(f" · Resolved {resolved_at}", size=12, color=colors["text_muted"])
+                                        ],
+                                        spacing=0,
+                                        wrap=True
+                                    )
                                 ],
-                                expand=True
+                                expand=True,
+                                spacing=4
                             ),
-                            ft.ElevatedButton(
-                                content=ft.Text("Give Feedback"),
-                                icon=ft.Icons.STAR_RATE,
-                                style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
-                                on_click=open_feedback_dialog
+                            # Feedback status badge
+                            ft.Column(
+                                controls=[
+                                    ft.Container(
+                                        content=ft.Text(
+                                            fb_badge_text, size=11,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=fb_badge_color
+                                        ),
+                                        bgcolor=ft.Colors.with_opacity(0.12, fb_badge_color),
+                                        border_radius=6,
+                                        padding=ft.padding.symmetric(horizontal=8, vertical=3)
+                                    ),
+                                    ft.ElevatedButton(
+                                        content=ft.Text("View / Rate" if not already_gave else "View Details"),
+                                        icon=ft.Icons.STAR_RATE if not already_gave else ft.Icons.VISIBILITY,
+                                        style=ft.ButtonStyle(
+                                            bgcolor=colors["primary"] if not already_gave else colors.get("surface_variant", "#e2e8f0"),
+                                            color=ft.Colors.WHITE if not already_gave else colors["text"]
+                                        ),
+                                        on_click=lambda _, c=comp: _open_complaint_detail_with_feedback(c)
+                                    )
+                                ],
+                                spacing=4,
+                                horizontal_alignment=ft.CrossAxisAlignment.END
                             )
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.START,
                         wrap=True
                     ),
                     bgcolor=colors["surface"],
                     border=ft.Border.all(1, colors["border"]),
                     border_radius=10,
-                    padding=16,
-                    margin=ft.margin.only(bottom=8)
+                    padding=14,
+                    margin=ft.margin.only(bottom=6)
                 )
             )
 
-        if not feedback_cards:
-            feedback_cards.append(
+        if not list_controls:
+            list_controls.append(
                 ft.Container(
-                    content=ft.Text("No resolved complaints waiting for feedback.", size=14, color=colors["text_muted"]),
-                    padding=40
+                    content=ft.Column(
+                        controls=[
+                            ft.Icon(ft.Icons.INBOX_OUTLINED, size=40, color=colors["text_muted"]),
+                            ft.Text(
+                                "No resolved complaints available for feedback in your department.",
+                                size=14, color=colors["text_muted"],
+                                text_align=ft.TextAlign.CENTER
+                            )
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=10
+                    ),
+                    padding=ft.padding.symmetric(vertical=32, horizontal=24),
+                    alignment=ft.Alignment(0, 0)
                 )
             )
 
+        # Layout: no expand=True on column to prevent blank-space glitch.
+        # The outer active_container is expand=True; the column scrolls within it.
         return ft.Column(
             controls=[
-                ft.Text("Resolution Feedback & Quality Rating", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                ft.Text("Feedback can only be submitted for Resolved grievances.", size=13, color=colors["text_muted"]),
-                ft.Column(controls=feedback_cards, spacing=8)
+                ft.Row(
+                    controls=[
+                        ft.Column(
+                            controls=[
+                                ft.Text("Resolution Feedback", size=22,
+                                        weight=ft.FontWeight.BOLD, color=colors["text"]),
+                                ft.Text(
+                                    "Resolved complaints from your department · Click a complaint ID to view details and give feedback.",
+                                    size=13, color=colors["text_muted"]
+                                )
+                            ],
+                            spacing=2
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.REFRESH,
+                            tooltip="Refresh",
+                            on_click=lambda _: self._switch_view(3)
+                        )
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    wrap=True
+                ),
+                ft.Divider(color=colors["border"]),
+                ft.Column(controls=list_controls, spacing=0)
             ],
             scroll=ft.ScrollMode.AUTO,
-            spacing=14,
-            expand=True
+            spacing=12
         )
 
     # -------------------------------------------------------------------------

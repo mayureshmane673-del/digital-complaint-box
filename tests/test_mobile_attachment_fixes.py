@@ -161,12 +161,15 @@ def test_temp_upload_file_removal_on_delete():
 
     assert os.path.exists(tmp_path)
 
-    # Simulate StudentView selected_files state with temporary file
+    # Simulate StudentView selected_files state with temporary file.
+    # As of v1.0.9+, selected files are stored on page._dcb_selected_files
+    # so they persist across StudentView recreations on Android WebSocket reconnects.
     page = MagicMock(spec=ft.Page)
     student = {"id": "std-1", "roll_number": "240101001", "department_id": "dept-1"}
     sv = StudentView(page, student)
 
-    sv.selected_files.append({
+    # Add to the page-level persistent list (the new architecture)
+    sv.page._dcb_selected_files.append({
         "name": "photo.jpg",
         "path": tmp_path,
         "size": 104,
@@ -174,9 +177,10 @@ def test_temp_upload_file_removal_on_delete():
     })
 
     # Remove file
-    removed = sv.selected_files.pop(0)
+    removed = sv.page._dcb_selected_files.pop(0)
     if removed.get("is_temp") and removed.get("path"):
         if os.path.exists(removed["path"]):
             os.remove(removed["path"])
 
     assert not os.path.exists(tmp_path)
+

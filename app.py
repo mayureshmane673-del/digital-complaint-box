@@ -297,7 +297,7 @@ def api_health():
     sb_host = urlparse(sb_url).netloc if sb_url else ""
     return {
         "status": "healthy",
-        "version": "v1.0.8-mobile-perf-polish",
+        "version": "v1.0.9-feedback-attachment-fix",
         "supabase_hostname": sb_host,
         "env_configured": {
             "SUPABASE_URL": bool(sb_url),
@@ -340,7 +340,7 @@ def api_diagnostics_subcategories():
 
     return {
         "status": "ok",
-        "version": "v1.0.8-mobile-perf-polish",
+        "version": "v1.0.9-feedback-attachment-fix",
         "total_categories": len(cats),
         "total_locations": len(locs),
         "test_categories": test_results
@@ -366,7 +366,7 @@ def api_auth_check():
     client = get_trusted_backend_client()
 
     report = {
-        "version": "v1.0.8-mobile-perf-polish",
+        "version": "v1.0.9-feedback-attachment-fix",
         "supabase_hostname": sb_host,
         "env_status": {
             "SUPABASE_URL_SET": bool(sb_url),
