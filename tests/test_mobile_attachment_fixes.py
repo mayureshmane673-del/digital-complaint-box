@@ -150,6 +150,51 @@ def test_tab_index_restoration_across_reconnect():
     assert store.get("active_tab_index") == 2
 
 
+def test_page_level_attachment_hooks_rebind():
+    """UI hooks on page must be rebindable after StudentView rebuild (mobile reconnect)."""
+    from ui.components.page_file_services import (
+        ensure_complaint_attachment_state,
+        register_complaint_attachment_hooks,
+        _on_complaint_picker_result,
+    )
+
+    page = MagicMock(spec=ft.Page)
+    page._dcb_selected_files = []
+    page._dcb_picker_pending = False
+    page._dcb_picker_opened_at = 0.0
+    page._dcb_attachment_hooks = {}
+    page.services = []
+    page.get_upload_url = MagicMock(return_value="http://upload/test")
+
+    calls = {"refresh": 0, "btn": 0}
+
+    register_complaint_attachment_hooks(
+        page,
+        refresh_files_display=lambda: calls.__setitem__("refresh", calls["refresh"] + 1),
+        update_attach_btn=lambda: calls.__setitem__("btn", calls["btn"] + 1),
+        student_id="student-uuid",
+    )
+
+    evt = MagicMock()
+    evt.files = []
+    _on_complaint_picker_result(page, evt)
+    assert calls["btn"] >= 1
+
+
+def test_second_attachment_picker_clears_pending_flag():
+    from ui.components.page_file_services import ensure_complaint_attachment_state, _on_complaint_picker_result
+
+    page = MagicMock(spec=ft.Page)
+    ensure_complaint_attachment_state(page)
+    page._dcb_picker_pending = True
+    page._dcb_attachment_hooks = {"update_attach_btn": MagicMock(), "refresh_files_display": MagicMock()}
+
+    evt = MagicMock()
+    evt.files = []
+    _on_complaint_picker_result(page, evt)
+    assert page._dcb_picker_pending is False
+
+
 def test_temp_upload_file_removal_on_delete():
     """
     Verifies that temporary upload files on server disk are properly removed

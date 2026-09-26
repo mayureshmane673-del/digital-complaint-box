@@ -6,12 +6,9 @@ private anonymous tracking, hostel status, and feedback rating.
 
 import os
 import uuid
-
-import weakref
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
-from pathlib import Path
 import flet as ft
 
 logger = logging.getLogger("complaint_box.student_view")
@@ -35,7 +32,14 @@ from ui.components.animated_chart import (
     create_priority_distribution_chart,
     create_category_distribution_chart
 )
-from utils.validators import validate_description, validate_attachment
+from utils.validators import validate_description
+from ui.components.page_file_services import (
+    ensure_complaint_attachment_state,
+    clear_stale_picker_pending,
+    get_complaint_file_picker,
+    register_complaint_attachment_hooks,
+    open_complaint_attachment_picker,
+)
 from models.user import UserRole
 from models.complaint import (
     PRACTICAL_SUBCATEGORIES,
@@ -60,47 +64,11 @@ class StudentView:
         self.subcategories_by_cat = {}
         self.locations = []
 
-        # --- MOBILE-RESILIENT ATTACHMENT ARCHITECTURE ---
-        # selected_files is stored on the PAGE object (not self) so it persists
-        # across StudentView recreations caused by Android WebSocket reconnects.
-        # On reconnect, app.py calls render_portal_view() → new StudentView(),
-        # but page object is the same, so _dcb_selected_files is preserved.
-        if not hasattr(self.page, "_dcb_selected_files"):
-            self.page._dcb_selected_files = []
-
-        # Reuse the existing page-level FilePicker if available.
-        # On Android, a reconnect creates a new StudentView but the old picker
-        # may still be registered. We always reuse a single picker per page
-        # session to avoid orphaned pickers piling up in page.services.
-        existing_picker = getattr(self.page, "_dcb_file_picker", None)
-        if existing_picker is not None:
-            # Re-use the existing picker — it is already registered.
-            self.file_picker = existing_picker
-        else:
-            self.file_picker = ft.FilePicker()
-            self.page._dcb_file_picker = self.file_picker
-
-        # Ensure picker is in page.services (register only once).
-        if hasattr(self.page, "services"):
-            if self.file_picker not in self.page.services:
-                self.page.services.append(self.file_picker)
-        # Also register with ServiceRegistry (required for mobile invoke_method).
-        if hasattr(self.page, "_services") and hasattr(self.page._services, "register_service"):
-            try:
-                self.page._services.register_service(self.file_picker)
-            except Exception:
-                pass
-        try:
-            self.file_picker._parent = weakref.ref(self.page)
-        except Exception:
-            pass
-
-        # Picker-pending flag: tracks whether a pick_files() call is in flight.
-        # Stored on page so reconnect-rebuilt StudentViews can detect a pending op.
-        if not hasattr(self.page, "_dcb_picker_pending"):
-            self.page._dcb_picker_pending = False
-
-    def _ensure_reference_data_loaded(self):
+        # Page-level attachment state + singleton FilePicker (see page_file_services.py).
+        # Uses session.store for persistence across WebSocket reconnects.
+        ensure_complaint_attachment_state(self.page)
+        clear_stale_picker_pending(self.page)
+        self.file_picker = get_complaint_file_picker(self.page)
         if not self.categories:
             from services.cache_service import CacheService
             self.categories, self.subcategories_by_cat, self.locations = CacheService.get_categories_and_subcategories()
@@ -137,6 +105,11 @@ class StudentView:
             ],
             spacing=14, expand=True
         )
+
+    def _ensure_reference_data_loaded(self):
+        if not self.categories:
+            from services.cache_service import CacheService
+            self.categories, self.subcategories_by_cat, self.locations = CacheService.get_categories_and_subcategories()
 
     def _switch_view(self, index: int):
         self.selected_tab_index = index
@@ -521,7 +494,6 @@ class StudentView:
         # When Android opens the file manager, the WebSocket may briefly disconnect.
         # app.py will call render_portal_view() which creates a new StudentView,
         # but page._dcb_selected_files persists the already-selected files.
-        # page._dcb_selected_files is the persistent list (accessed via _get_count() helper below)
 
         files_display = ft.Column(spacing=4)
 
@@ -544,8 +516,12 @@ class StudentView:
 
         def update_attach_btn():
             n = _get_count()
-            attach_btn.disabled = (n >= 2)
-            attach_btn.content = ft.Text(_count_label())
+            pending = getattr(self.page, "_dcb_picker_pending", False)
+            attach_btn.disabled = (n >= 2) or pending
+            if pending:
+                attach_btn.content = ft.Text("Opening Picker...")
+            else:
+                attach_btn.content = ft.Text(_count_label())
             try:
                 attach_btn.update()
             except Exception:
@@ -637,168 +613,22 @@ class StudentView:
                 except Exception:
                     pass
 
-        # Populate pre-existing attachments from persistent page-level list
-        # (handles Android reconnect case where files were already selected)
+# Populate pre-existing attachments if any
         if self.page._dcb_selected_files:
             refresh_files_display(update_page=False)
 
-        # --- ROBUST MOBILE & DESKTOP ATTACHMENT PICKER ---
-        async def on_pick_attachment(e):
-            """Button click handler for picking attachments.
+        register_complaint_attachment_hooks(
+            self.page,
+            refresh_files_display=lambda: refresh_files_display(update_page=True),
+            update_attach_btn=update_attach_btn,
+            student_id=self.student_id,
+        )
 
-            Designed for real Android and desktop browser lifecycles:
-            1. Enforces max 2 attachments limit.
-            2. Uses cancel_upload_on_window_blur=False so Android system file chooser
-               switching does not abort the selection on window blur.
-            3. Awaits pick_files(...) to receive selected FilePickerFile objects.
-            4. If desktop path is available, registers local path immediately.
-            5. If web/mobile (path is None), streams file to server temp path via
-               page.get_upload_url and file_picker.upload().
-            6. Verifies upload completion via both callback and disk presence.
-            7. Appends to page._dcb_selected_files (persistent across any reconnects).
-            8. Always clears picker_pending and refreshes UI in finally block so
-               subsequent picks (and picking a 2nd file) work 100% reliably.
-            """
-            if _get_count() >= 2:
-                show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
-                return
+        def on_pick_attachment(e):
             if getattr(self.page, "_dcb_picker_pending", False):
-                show_feedback_message(self.page, "File picker is currently open.", is_error=False)
-                return
-
-            self.page._dcb_picker_pending = True
-            attach_btn.disabled = True
-            attach_btn.content = ft.Text("Opening Picker...")
-            try:
-                attach_btn.update()
-            except Exception:
-                pass
-            try:
-                self.page.update()
-            except Exception:
-                pass
-
-            try:
-                files = await self.file_picker.pick_files(
-                    file_type=ft.FilePickerFileType.CUSTOM,
-                    allowed_extensions=["jpg", "jpeg", "png", "webp", "mp4", "mov", "pdf"],
-                    allow_multiple=False,
-                    with_data=False,
-                    cancel_upload_on_window_blur=False
-                )
-
-                if not files:
-                    logger.info("[ATTACHMENT] File picker cancelled or no file selected.")
-                    return
-
-                for f in files:
-                    if _get_count() >= 2:
-                        show_feedback_message(self.page, "Maximum 2 attachments allowed.", is_error=True)
-                        break
-
-                    f_name = getattr(f, "name", "") or ""
-                    f_size = getattr(f, "size", 0) or 0
-
-                    valid, err = validate_attachment(f_name, f_size)
-                    if not valid:
-                        show_feedback_message(self.page, err, is_error=True)
-                        continue
-
-                    f_path = getattr(f, "path", None)
-                    if f_path and os.path.exists(f_path):
-                        # Desktop mode: local path available directly
-                        self.page._dcb_selected_files.append({
-                            "name": f_name,
-                            "path": f_path,
-                            "bytes": None,
-                            "size": f_size,
-                            "is_temp": False
-                        })
-                        logger.info("[ATTACHMENT] Added desktop file: %s", f_name)
-                    else:
-                        # Web / Android mobile mode: upload via Flet upload endpoint
-                        clean_sid = str(self.student_id).replace("-", "")
-                        ext = os.path.splitext(f_name)[1].lower()
-                        temp_rel_path = f"temp/{clean_sid}/{uuid.uuid4().hex}{ext}"
-
-                        try:
-                            upload_url = self.page.get_upload_url(temp_rel_path, 3600)
-                        except Exception as ex:
-                            logger.warning("get_upload_url failed: %s", ex)
-                            show_feedback_message(self.page, f"Cannot prepare upload for {f_name}.", is_error=True)
-                            continue
-
-                        abs_disk_path = os.path.realpath(
-                            os.path.join(str(Path("uploads").resolve()), temp_rel_path)
-                        )
-
-                        upload_done = {"done": False, "error": None}
-
-                        def on_upload_progress(evt: ft.FilePickerUploadEvent):
-                            if evt.error:
-                                upload_done["error"] = evt.error
-                                upload_done["done"] = True
-                            elif (
-                                (evt.progress is not None and evt.progress >= 0.99)
-                                or getattr(evt, "status", None) == "done"
-                            ):
-                                upload_done["done"] = True
-
-                        self.file_picker.on_upload = on_upload_progress
-
-                        attach_btn.content = ft.Text(f"Uploading {f_name[:12]}...")
-                        try:
-                            attach_btn.update()
-                        except Exception:
-                            pass
-
-                        try:
-                            await self.file_picker.upload([
-                                ft.FilePickerUploadFile(
-                                    name=f_name,
-                                    id=getattr(f, "id", None) or f_name,
-                                    upload_url=upload_url,
-                                    method="PUT"
-                                )
-                            ])
-                        except Exception as ex:
-                            logger.warning("file_picker.upload failed: %s", ex)
-                            show_feedback_message(self.page, f"Upload failed for {f_name}.", is_error=True)
-                            continue
-
-                        # Poll for upload completion on server disk (up to 30s)
-                        for _ in range(60):
-                            if os.path.exists(abs_disk_path) and os.path.getsize(abs_disk_path) > 0:
-                                upload_done["done"] = True
-                                break
-                            if upload_done.get("error"):
-                                break
-                            await asyncio.sleep(0.5)
-
-                        if upload_done.get("error"):
-                            show_feedback_message(self.page, f"Upload error: {upload_done['error']}", is_error=True)
-                            continue
-
-                        if os.path.exists(abs_disk_path) and os.path.getsize(abs_disk_path) > 0:
-                            actual_size = os.path.getsize(abs_disk_path) or f_size
-                            self.page._dcb_selected_files.append({
-                                "name": f_name,
-                                "path": abs_disk_path,
-                                "bytes": None,
-                                "size": actual_size,
-                                "is_temp": True
-                            })
-                            logger.info("[ATTACHMENT] Uploaded '%s' (%.1f KB)", f_name, actual_size / 1024)
-                        else:
-                            show_feedback_message(self.page, f"Upload timed out for {f_name}.", is_error=True)
-
-            except Exception as ex:
-                logger.warning("[ATTACHMENT] pick_files error: %s", ex)
-                show_feedback_message(self.page, "Unable to open file picker. Please try again.", is_error=True)
-            finally:
-                self.page._dcb_picker_pending = False
-                refresh_files_display()
-                update_attach_btn()
+                attach_btn.disabled = True
+                attach_btn.content = ft.Text("Opening Picker...")
+            open_complaint_attachment_picker(self.page)
 
         attach_btn.on_click = on_pick_attachment
 

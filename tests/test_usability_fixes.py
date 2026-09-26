@@ -29,28 +29,43 @@ def test_login_button_loading_state_and_duplicate_prevention():
 
 
 def test_mobile_pick_files_blur_setting():
-    """Verify that student view uses mobile-resilient attachment picker configuration.
+    """Verify page-level attachment services (singleton picker + on_result hooks).
 
     As of v1.1.0, the attachment picker uses:
     - cancel_upload_on_window_blur=False (prevents Android window blur from cancelling selection)
     - page-level persistent FilePicker (_dcb_file_picker)
     - page-level selected_files (_dcb_selected_files) that survive reconnects
     - with_data=False and allow_multiple=False to prevent mobile RAM bloat
+    - session.store persistence across reconnects
+    - stable callbacks set once at picker creation
+    - sequential upload queue
     """
     import inspect
     from ui.views.student_view import StudentView
+    from ui.components import page_file_services as pfs
 
-    # Verify mobile-resilient architecture is in place
     st_src = inspect.getsource(StudentView._render_new_complaint)
-    assert "cancel_upload_on_window_blur=False" in st_src, "Must disable window blur cancellation for mobile file picker"
-    assert "_dcb_selected_files" in st_src, "Must use page-level persistent selected_files"
-    assert "allow_multiple=False" in st_src, "Must enforce single-file selection"
-    assert "with_data=False" in st_src, "Must use with_data=False to avoid memory bloat"
+    # New architecture uses page_file_services
+    assert "register_complaint_attachment_hooks" in st_src
+    assert "open_complaint_attachment_picker" in st_src
+    assert "_dcb_selected_files" in st_src
+    # Old settings (cancel_upload_on_window_blur, allow_multiple, with_data) are now in page_file_services
 
-    # Verify __init__ registers the page-level picker
+    pfs_src = inspect.getsource(pfs.open_complaint_attachment_picker)
+    assert "with_data=False" in pfs_src
+    assert "allow_multiple=False" in pfs_src
+    assert "cancel_upload_on_window_blur=False" in pfs_src
+
+    svc_src = inspect.getsource(pfs._on_complaint_picker_result)
+    assert "on_result" in svc_src or "picker_result" in svc_src
+
     init_src = inspect.getsource(StudentView.__init__)
-    assert "_dcb_file_picker" in init_src, "Must use page-level persistent picker"
-    assert "_dcb_picker_pending" in init_src, "Must track picker pending state"
+    assert "get_complaint_file_picker" in init_src
+    assert "ensure_complaint_attachment_state" in init_src
+    # Verify page-level persistent picker registration - state is in session.store
+    assert "_dcb_file_picker" in init_src or "get_complaint_file_picker" in init_src
+    # _dcb_picker_pending is initialized via ensure_complaint_attachment_state in session.store
+    assert "ensure_complaint_attachment_state" in init_src
 
 
 # =============================================================================
@@ -288,21 +303,30 @@ def test_mobile_attachment_memory_settings():
     """Verify StudentView pick_files uses memory-safe with_data=False and single-file selection."""
     import inspect
     from ui.views.student_view import StudentView
+    from ui.components import page_file_services as pfs
 
-    src = inspect.getsource(StudentView._render_new_complaint)
-    assert "allow_multiple=False" in src
-    assert "with_data=False" in src
-    assert "cancel_upload_on_window_blur=False" in src, "Must have cancel_upload_on_window_blur=False for Android mobile support"
-    assert "Add Attachment (0/2)" in src
-    assert "Maximum 2 Attachments Added" in src
+    src = inspect.getsource(pfs._ensure_complaint_picker)
+    assert "on_result" in src or "picker_result" in src
+    assert "_on_complaint_picker_result" in src
+
+    src2 = inspect.getsource(pfs.open_complaint_attachment_picker)
+    assert "allow_multiple=False" in src2
+    assert "with_data=False" in src2
+    assert "cancel_upload_on_window_blur=False" in src2
+
+    # Button labels are in StudentView
+    st_src = inspect.getsource(StudentView._render_new_complaint)
+    assert "Add Attachment (0/2)" in st_src
+    assert "Maximum 2 Attachments Added" in st_src
+    # allow_multiple/with_data/cancel_upload_on_window_blur are in page_file_services
 
 
 def test_excel_importer_size_limit():
     """Verify Excel importer dialog enforces a 5MB size limit to protect mobile RAM."""
     import inspect
-    import ui.components.excel_importer as excel_imp
+    from ui.components import page_file_services as pfs
 
-    src = inspect.getsource(excel_imp.show_excel_importer_dialog)
+    src = inspect.getsource(pfs.open_spreadsheet_import_picker)
     assert "5 * 1024 * 1024" in src
     assert "5MB limit" in src
 

@@ -43,6 +43,9 @@ def main(page: ft.Page):
     AppState.init_session(page)
     AppState.page = page
 
+    from ui.components.page_file_services import ensure_complaint_attachment_state
+    ensure_complaint_attachment_state(page)
+
     # Fast non-blocking schema status (database is verified in production)
     schema_status = {"connected": True, "tables_ready": True}
 
@@ -340,7 +343,7 @@ def api_diagnostics_subcategories():
 
     return {
         "status": "ok",
-        "version": "v1.0.9-feedback-attachment-fix",
+        "version": "v1.1.0-mobile-attachment-feedback-flow",
         "total_categories": len(cats),
         "total_locations": len(locs),
         "test_categories": test_results
@@ -366,7 +369,7 @@ def api_auth_check():
     client = get_trusted_backend_client()
 
     report = {
-        "version": "v1.0.9-feedback-attachment-fix",
+        "version": "v1.1.0-mobile-attachment-feedback-flow",
         "supabase_hostname": sb_host,
         "env_status": {
             "SUPABASE_URL_SET": bool(sb_url),
@@ -442,5 +445,3 @@ if __name__ == "__main__":
         uvicorn.run(app, host=host, port=port)
     else:
         ft.run(main=main)
-
-

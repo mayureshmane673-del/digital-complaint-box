@@ -3,15 +3,12 @@ ui/components/excel_importer.py: Coordinator Excel/CSV batch roll number importe
 """
 
 import os
-import uuid
-import asyncio
-import weakref
-from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 import flet as ft
 from services.roll_number_service import RollNumberService
 from ui.theme import COLOR_PRIMARY, COLOR_BORDER, COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED
 from ui.flet_compat import open_dialog, close_dialog
+from ui.components.page_file_services import open_spreadsheet_import_picker
 
 
 def show_excel_importer_dialog(
@@ -23,138 +20,46 @@ def show_excel_importer_dialog(
 ):
     selected_path = ft.Text("No file selected", italic=True, size=12, color=COLOR_TEXT_MUTED)
     summary_container = ft.Column(spacing=8)
-
-    file_picker = ft.FilePicker()
-    if hasattr(page, "services"):
-        if file_picker not in page.services:
-            page.services.append(file_picker)
-    if hasattr(page, "_services") and hasattr(page._services, "register_service"):
-        try:
-            page._services.register_service(file_picker)
-        except Exception:
-            pass
-    try:
-        file_picker._parent = weakref.ref(page)
-    except Exception:
-        pass
-    try:
-        setattr(page, "_importer_file_picker", file_picker)
-    except Exception:
-        pass
-    page.update()
-
     selected_file_info = [None]
 
-    async def on_choose_file(e):
-        try:
-            files = await file_picker.pick_files(
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=["xlsx", "xls", "csv"],
-                allow_multiple=False,
-                with_data=False,
-                cancel_upload_on_window_blur=False
-            )
-            if not files or len(files) == 0:
-                selected_file_info[0] = None
-                selected_path.value = "No file selected"
-                selected_path.italic = True
-                selected_path.color = COLOR_TEXT_MUTED
-                import_btn.disabled = True
-                page.update()
-                return
-
-            f = files[0]
-            if getattr(f, "size", None) and f.size > 5 * 1024 * 1024:
-                selected_file_info[0] = None
-                selected_path.value = "File exceeds 5MB limit. Please upload a smaller spreadsheet."
-                selected_path.italic = False
-                selected_path.color = "#dc2626"
-                import_btn.disabled = True
-                page.update()
-                return
-
-            name_lower = f.name.lower()
-            if not (name_lower.endswith(".xlsx") or name_lower.endswith(".xls") or name_lower.endswith(".csv")):
-                selected_file_info[0] = None
-                selected_path.value = f"Invalid file type: {f.name}. Please select .xlsx, .xls, or .csv"
-                selected_path.italic = False
-                selected_path.color = "#dc2626"
-                import_btn.disabled = True
-                page.update()
-                return
-
-            # Desktop: use direct file path if available
-            if f.path and os.path.exists(f.path):
-                selected_file_info[0] = {
-                    "name": f.name,
-                    "bytes": None,
-                    "path": f.path,
-                    "is_temp": False
-                }
-            else:
-                # Web/Mobile: upload via HTTP PUT (avoids with_data memory issue)
-                selected_path.value = f"Uploading {f.name}..."
-                selected_path.italic = False
-                selected_path.color = COLOR_PRIMARY
-                page.update()
-
-                ext = os.path.splitext(f.name)[1].lower()
-                temp_rel_path = f"temp/imports/{uuid.uuid4().hex}{ext}"
-                upload_url = page.get_upload_url(temp_rel_path, 3600)
-
-                upload_state = {"done": False, "error": None}
-
-                def on_upload_evt(evt: ft.FilePickerUploadEvent):
-                    if evt.error:
-                        upload_state["error"] = evt.error
-                        upload_state["done"] = True
-                    elif (evt.progress is not None and evt.progress >= 0.99) or getattr(evt, "status", None) == "done":
-                        upload_state["done"] = True
-
-                file_picker.on_upload = on_upload_evt
-                await file_picker.upload([
-                    ft.FilePickerUploadFile(
-                        name=f.name,
-                        id=f.id,
-                        upload_url=upload_url,
-                        method="PUT"
-                    )
-                ])
-
-                abs_disk_path = os.path.realpath(os.path.join(str(Path("uploads").resolve()), temp_rel_path))
-                for _poll in range(60):
-                    if os.path.exists(abs_disk_path) and os.path.getsize(abs_disk_path) > 0:
-                        break
-                    if upload_state.get("error"):
-                        break
-                    await asyncio.sleep(0.5)
-
-                if upload_state.get("error") or not os.path.exists(abs_disk_path):
-                    selected_file_info[0] = None
-                    selected_path.value = f"Upload failed for {f.name}. Please try again."
-                    selected_path.italic = False
-                    selected_path.color = "#dc2626"
-                    import_btn.disabled = True
-                    page.update()
-                    return
-
-                selected_file_info[0] = {
-                    "name": f.name,
-                    "bytes": None,
-                    "path": abs_disk_path,
-                    "is_temp": True
-                }
-
-            display_name = f.name
-            selected_path.value = f"Selected: {display_name}"
-            selected_path.italic = False
+    def _set_path_message(msg: str, *, error: bool = False, primary: bool = False):
+        selected_path.value = msg
+        selected_path.italic = not primary and not error
+        if error:
+            selected_path.color = "#dc2626"
+        elif primary:
             selected_path.color = COLOR_PRIMARY
-            import_btn.disabled = False
+        else:
+            selected_path.color = COLOR_TEXT_MUTED
+
+    def on_import_busy(busy: bool, message: str):
+        if busy and message:
+            _set_path_message(message, primary=True)
+        elif message and not busy:
+            if message.startswith("Selected:"):
+                _set_path_message(message, primary=True)
+            elif message == "No file selected":
+                _set_path_message(message)
+            else:
+                _set_path_message(message, error=True)
+        try:
             page.update()
         except Exception:
-            selected_path.value = "Unable to open file picker. Please try again."
-            selected_path.color = "#dc2626"
-            page.update()
+            pass
+
+    def on_file_selected(info):
+        selected_file_info[0] = info
+        import_btn.disabled = info is None
+        if info is None and selected_path.value == "No file selected":
+            pass
+        page.update()
+
+    def on_choose_file(e):
+        open_spreadsheet_import_picker(
+            page,
+            on_selected=on_file_selected,
+            on_busy=on_import_busy,
+        )
 
     def run_import(e):
         if not selected_file_info[0]:
@@ -165,7 +70,6 @@ def show_excel_importer_dialog(
 
         info = selected_file_info[0]
 
-        # Read bytes from disk path for upload-based flow
         file_bytes_val = info.get("bytes")
         file_path_val = info.get("path")
         if not file_bytes_val and file_path_val and os.path.exists(file_path_val):
@@ -181,7 +85,6 @@ def show_excel_importer_dialog(
             file_name=info.get("name")
         )
 
-        # Clean up temp file if it was uploaded via HTTP
         if info.get("is_temp") and file_path_val and os.path.exists(file_path_val):
             try:
                 os.remove(file_path_val)
@@ -190,8 +93,9 @@ def show_excel_importer_dialog(
 
         import_btn.disabled = False
         import_btn.text = "Import File"
+        selected_file_info[0] = None
+        _set_path_message("No file selected")
 
-        # Render summary metrics
         metrics_rows = [
             ft.Text(summary.get("message", ""), weight=ft.FontWeight.BOLD, size=13, color="#10b981" if summary.get("success") else "#dc2626"),
             ft.Row(
@@ -259,21 +163,23 @@ def show_excel_importer_dialog(
                                 icon=ft.Icons.FILE_UPLOAD,
                                 on_click=on_choose_file
                             ),
-                            selected_path
+                            ft.Container(content=selected_path, expand=True)
                         ],
                         alignment=ft.MainAxisAlignment.START,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=12
+                        spacing=12,
+                        wrap=True
                     ),
                     import_btn,
                     ft.Divider(color=COLOR_BORDER),
                     summary_container
                 ],
                 spacing=14,
-                scroll=ft.ScrollMode.AUTO
+                scroll=ft.ScrollMode.AUTO,
+                tight=True,
             ),
-            width=540,
-            height=360
+            width=min(540, (page.width or 540) - 32),
+            padding=0,
         ),
         actions=[
             ft.TextButton("Close", on_click=lambda _: close_dialog(page, dlg))
