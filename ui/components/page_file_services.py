@@ -69,6 +69,30 @@ def _register_picker(page: ft.Page, picker: ft.FilePicker, attr: str) -> ft.File
     return picker
 
 
+def _store_get(store, key, default=None):
+    """Safe get from SessionStore or dict."""
+    if hasattr(store, 'contains_key'):  # SessionStore
+        if store.contains_key(key):
+            return store.get(key)
+        return default
+    return store.get(key, default)
+
+
+def _store_set(store, key, value):
+    """Safe set on SessionStore or dict."""
+    if hasattr(store, 'contains_key'):  # SessionStore
+        store.set(key, value)
+    else:
+        store[key] = value
+
+
+def _store_has(store, key):
+    """Safe key check on SessionStore or dict."""
+    if hasattr(store, 'contains_key'):  # SessionStore
+        return store.contains_key(key)
+    return key in store
+
+
 def _init_session_state(page: ft.Page) -> None:
     """Initialize attachment state in session store (persists across reconnects)."""
     store = _get_session_store(page)
@@ -90,33 +114,33 @@ def _init_session_state(page: ft.Page) -> None:
             setattr(page, SESSION_KEY_PICKER_INVOCATION_ID, 0)
         return
 
-    if SESSION_KEY_SELECTED_FILES not in store:
-        store[SESSION_KEY_SELECTED_FILES] = []
-    if SESSION_KEY_PICKER_PENDING not in store:
-        store[SESSION_KEY_PICKER_PENDING] = False
-    if SESSION_KEY_PICKER_OPENED_AT not in store:
-        store[SESSION_KEY_PICKER_OPENED_AT] = 0.0
-    if SESSION_KEY_ATTACHMENT_HOOKS not in store:
-        store[SESSION_KEY_ATTACHMENT_HOOKS] = {}
-    if SESSION_KEY_UPLOAD_QUEUE not in store:
-        store[SESSION_KEY_UPLOAD_QUEUE] = []
-    if SESSION_KEY_UPLOAD_ACTIVE not in store:
-        store[SESSION_KEY_UPLOAD_ACTIVE] = False
-    if SESSION_KEY_PICKER_INVOCATION_ID not in store:
-        store[SESSION_KEY_PICKER_INVOCATION_ID] = 0
+    if not _store_has(store, SESSION_KEY_SELECTED_FILES):
+        _store_set(store, SESSION_KEY_SELECTED_FILES, [])
+    if not _store_has(store, SESSION_KEY_PICKER_PENDING):
+        _store_set(store, SESSION_KEY_PICKER_PENDING, False)
+    if not _store_has(store, SESSION_KEY_PICKER_OPENED_AT):
+        _store_set(store, SESSION_KEY_PICKER_OPENED_AT, 0.0)
+    if not _store_has(store, SESSION_KEY_ATTACHMENT_HOOKS):
+        _store_set(store, SESSION_KEY_ATTACHMENT_HOOKS, {})
+    if not _store_has(store, SESSION_KEY_UPLOAD_QUEUE):
+        _store_set(store, SESSION_KEY_UPLOAD_QUEUE, [])
+    if not _store_has(store, SESSION_KEY_UPLOAD_ACTIVE):
+        _store_set(store, SESSION_KEY_UPLOAD_ACTIVE, False)
+    if not _store_has(store, SESSION_KEY_PICKER_INVOCATION_ID):
+        _store_set(store, SESSION_KEY_PICKER_INVOCATION_ID, 0)
 
 
 def _get_selected_files(page: ft.Page) -> List[Dict[str, Any]]:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(SESSION_KEY_SELECTED_FILES, [])
+        return _store_get(store, SESSION_KEY_SELECTED_FILES, [])
     return getattr(page, SESSION_KEY_SELECTED_FILES, [])
 
 
 def _set_selected_files(page: ft.Page, files: List[Dict[str, Any]]) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[SESSION_KEY_SELECTED_FILES] = files
+        _store_set(store, SESSION_KEY_SELECTED_FILES, files)
     else:
         setattr(page, SESSION_KEY_SELECTED_FILES, files)
 
@@ -124,14 +148,14 @@ def _set_selected_files(page: ft.Page, files: List[Dict[str, Any]]) -> None:
 def _get_picker_pending(page: ft.Page) -> bool:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(SESSION_KEY_PICKER_PENDING, False)
+        return _store_get(store, SESSION_KEY_PICKER_PENDING, False)
     return getattr(page, SESSION_KEY_PICKER_PENDING, False)
 
 
 def _set_picker_pending(page: ft.Page, value: bool) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[SESSION_KEY_PICKER_PENDING] = value
+        _store_set(store, SESSION_KEY_PICKER_PENDING, value)
     else:
         setattr(page, SESSION_KEY_PICKER_PENDING, value)
 
@@ -139,14 +163,14 @@ def _set_picker_pending(page: ft.Page, value: bool) -> None:
 def _get_picker_opened_at(page: ft.Page) -> float:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(SESSION_KEY_PICKER_OPENED_AT, 0.0)
+        return _store_get(store, SESSION_KEY_PICKER_OPENED_AT, 0.0)
     return getattr(page, SESSION_KEY_PICKER_OPENED_AT, 0.0)
 
 
 def _set_picker_opened_at(page: ft.Page, value: float) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[SESSION_KEY_PICKER_OPENED_AT] = value
+        _store_set(store, SESSION_KEY_PICKER_OPENED_AT, value)
     else:
         setattr(page, SESSION_KEY_PICKER_OPENED_AT, value)
 
@@ -154,14 +178,14 @@ def _set_picker_opened_at(page: ft.Page, value: float) -> None:
 def _get_attachment_hooks(page: ft.Page) -> Dict[str, Any]:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(SESSION_KEY_ATTACHMENT_HOOKS, {})
+        return _store_get(store, SESSION_KEY_ATTACHMENT_HOOKS, {})
     return getattr(page, SESSION_KEY_ATTACHMENT_HOOKS, {})
 
 
 def _set_attachment_hooks(page: ft.Page, hooks: Dict[str, Any]) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[SESSION_KEY_ATTACHMENT_HOOKS] = hooks
+        _store_set(store, SESSION_KEY_ATTACHMENT_HOOKS, hooks)
     else:
         setattr(page, SESSION_KEY_ATTACHMENT_HOOKS, hooks)
 
@@ -169,14 +193,14 @@ def _set_attachment_hooks(page: ft.Page, hooks: Dict[str, Any]) -> None:
 def _get_upload_queue(page: ft.Page) -> List[Dict[str, Any]]:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(SESSION_KEY_UPLOAD_QUEUE, [])
+        return _store_get(store, SESSION_KEY_UPLOAD_QUEUE, [])
     return getattr(page, SESSION_KEY_UPLOAD_QUEUE, [])
 
 
 def _set_upload_queue(page: ft.Page, queue: List[Dict[str, Any]]) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[SESSION_KEY_UPLOAD_QUEUE] = queue
+        _store_set(store, SESSION_KEY_UPLOAD_QUEUE, queue)
     else:
         setattr(page, SESSION_KEY_UPLOAD_QUEUE, queue)
 
@@ -184,14 +208,14 @@ def _set_upload_queue(page: ft.Page, queue: List[Dict[str, Any]]) -> None:
 def _get_upload_active(page: ft.Page) -> bool:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(SESSION_KEY_UPLOAD_ACTIVE, False)
+        return _store_get(store, SESSION_KEY_UPLOAD_ACTIVE, False)
     return getattr(page, SESSION_KEY_UPLOAD_ACTIVE, False)
 
 
 def _set_upload_active(page: ft.Page, value: bool) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[SESSION_KEY_UPLOAD_ACTIVE] = value
+        _store_set(store, SESSION_KEY_UPLOAD_ACTIVE, value)
     else:
         setattr(page, SESSION_KEY_UPLOAD_ACTIVE, value)
 
@@ -199,14 +223,14 @@ def _set_upload_active(page: ft.Page, value: bool) -> None:
 def _get_picker_invocation_id(page: ft.Page) -> int:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(SESSION_KEY_PICKER_INVOCATION_ID, 0)
+        return _store_get(store, SESSION_KEY_PICKER_INVOCATION_ID, 0)
     return getattr(page, SESSION_KEY_PICKER_INVOCATION_ID, 0)
 
 
 def _set_picker_invocation_id(page: ft.Page, value: int) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[SESSION_KEY_PICKER_INVOCATION_ID] = value
+        _store_set(store, SESSION_KEY_PICKER_INVOCATION_ID, value)
     else:
         setattr(page, SESSION_KEY_PICKER_INVOCATION_ID, value)
 
@@ -526,14 +550,14 @@ IMPORT_SESSION_KEY_INVOCATION_ID = "_dcb_import_invocation_id"
 def _get_import_picker_pending(page: ft.Page) -> bool:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(IMPORT_SESSION_KEY_PICKER_PENDING, False)
+        return _store_get(store, IMPORT_SESSION_KEY_PICKER_PENDING, False)
     return getattr(page, IMPORT_SESSION_KEY_PICKER_PENDING, False)
 
 
 def _set_import_picker_pending(page: ft.Page, value: bool) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[IMPORT_SESSION_KEY_PICKER_PENDING] = value
+        _store_set(store, IMPORT_SESSION_KEY_PICKER_PENDING, value)
     else:
         setattr(page, IMPORT_SESSION_KEY_PICKER_PENDING, value)
 
@@ -541,14 +565,14 @@ def _set_import_picker_pending(page: ft.Page, value: bool) -> None:
 def _get_import_upload_queue(page: ft.Page) -> List[Dict[str, Any]]:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(IMPORT_SESSION_KEY_UPLOAD_QUEUE, [])
+        return _store_get(store, IMPORT_SESSION_KEY_UPLOAD_QUEUE, [])
     return getattr(page, IMPORT_SESSION_KEY_UPLOAD_QUEUE, [])
 
 
 def _set_import_upload_queue(page: ft.Page, queue: List[Dict[str, Any]]) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[IMPORT_SESSION_KEY_UPLOAD_QUEUE] = queue
+        _store_set(store, IMPORT_SESSION_KEY_UPLOAD_QUEUE, queue)
     else:
         setattr(page, IMPORT_SESSION_KEY_UPLOAD_QUEUE, queue)
 
@@ -556,14 +580,14 @@ def _set_import_upload_queue(page: ft.Page, queue: List[Dict[str, Any]]) -> None
 def _get_import_upload_active(page: ft.Page) -> bool:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(IMPORT_SESSION_KEY_UPLOAD_ACTIVE, False)
+        return _store_get(store, IMPORT_SESSION_KEY_UPLOAD_ACTIVE, False)
     return getattr(page, IMPORT_SESSION_KEY_UPLOAD_ACTIVE, False)
 
 
 def _set_import_upload_active(page: ft.Page, value: bool) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[IMPORT_SESSION_KEY_UPLOAD_ACTIVE] = value
+        _store_set(store, IMPORT_SESSION_KEY_UPLOAD_ACTIVE, value)
     else:
         setattr(page, IMPORT_SESSION_KEY_UPLOAD_ACTIVE, value)
 
@@ -571,14 +595,14 @@ def _set_import_upload_active(page: ft.Page, value: bool) -> None:
 def _get_import_invocation_id(page: ft.Page) -> int:
     store = _get_session_store(page)
     if store is not None:
-        return store.get(IMPORT_SESSION_KEY_INVOCATION_ID, 0)
+        return _store_get(store, IMPORT_SESSION_KEY_INVOCATION_ID, 0)
     return getattr(page, IMPORT_SESSION_KEY_INVOCATION_ID, 0)
 
 
 def _set_import_invocation_id(page: ft.Page, value: int) -> None:
     store = _get_session_store(page)
     if store is not None:
-        store[IMPORT_SESSION_KEY_INVOCATION_ID] = value
+        _store_set(store, IMPORT_SESSION_KEY_INVOCATION_ID, value)
     else:
         setattr(page, IMPORT_SESSION_KEY_INVOCATION_ID, value)
 
