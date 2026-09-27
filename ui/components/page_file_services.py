@@ -362,6 +362,7 @@ def _queue_complaint_upload(
 
     try:
         upload_url = page.get_upload_url(temp_rel_path, 3600)
+        logger.info("[ATTACHMENT] DEBUG: get_upload_url returned url_type=%s", "absolute" if upload_url and upload_url.startswith("http") else "relative")
     except Exception as ex:
         logger.warning("[ATTACHMENT] temp_upload_failure get_upload_url: %s", ex)
         show_feedback_message(page, f"Cannot prepare upload for {file_name}.", is_error=True)
@@ -380,7 +381,7 @@ def _queue_complaint_upload(
     queue = _get_upload_queue(page)
     queue.append(upload_item)
     _set_upload_queue(page, queue)
-    logger.info("[ATTACHMENT] Queued upload: %s (queue size=%s)", file_name, len(queue))
+    logger.info("[ATTACHMENT] DEBUG: Queued upload: %s (queue size=%s, upload_active=%s)", file_name, len(queue), _get_upload_active(page))
 
     _process_upload_queue(page)
 
@@ -388,12 +389,13 @@ def _queue_complaint_upload(
 def _process_upload_queue(page: ft.Page) -> None:
     """Process the next upload in the queue sequentially."""
     if _get_upload_active(page) or not _get_upload_queue(page):
+        logger.info("[ATTACHMENT] DEBUG: _process_upload_queue skipped upload_active=%s queue_len=%s", _get_upload_active(page), len(_get_upload_queue(page) or []))
         return
 
     queue = _get_upload_queue(page)
     item = queue[0]
     _set_upload_active(page, True)
-    logger.info("[ATTACHMENT] Starting upload: %s", item["file_name"])
+    logger.info("[ATTACHMENT] DEBUG: Starting upload: %s (queue len=%s, upload_active=%s)", item["file_name"], len(queue), _get_upload_active(page))
 
     picker = _ensure_complaint_picker(page)
     try:
@@ -406,8 +408,10 @@ def _process_upload_queue(page: ft.Page) -> None:
                 method="PUT",
             )
         ]
+        logger.info("[ATTACHMENT] DEBUG: calling picker.upload for %s (name=%s id=%s url_type=%s)", item["file_name"], upload_args[0].name, upload_args[0].id, "absolute" if item["upload_url"].startswith("http") else "relative")
         if hasattr(page, "run_task"):
             page.run_task(picker.upload, upload_args)
+            logger.info("[ATTACHMENT] DEBUG: page.run_task(picker.upload, ...) called")
         else:
             # Fallback: schedule on current event loop
             import asyncio
@@ -430,13 +434,16 @@ def _on_complaint_upload_progress(page: ft.Page, e: ft.FilePickerUploadEvent) ->
     """Single stable upload progress handler - dispatches to queued item by file_name."""
     queue = _get_upload_queue(page)
     if not queue:
+        logger.info("[ATTACHMENT] DEBUG: on_upload called but queue empty")
         return
 
     item = queue[0]
     # FilePickerUploadEvent has file_name, not file_id. Match by file_name.
     if e.file_name != item["file_name"]:
-        logger.debug("[ATTACHMENT] Upload event for unknown file_name=%s (expected=%s)", e.file_name, item["file_name"])
+        logger.debug("[ATTACHMENT] DEBUG: Upload event for unknown file_name=%s (expected=%s)", e.file_name, item["file_name"])
         return
+
+    logger.info("[ATTACHMENT] DEBUG: on_upload event file_name=%s progress=%s status=%s error=%s", e.file_name, getattr(e, "progress", None), getattr(e, "status", None), getattr(e, "error", None))
 
     if e.error:
         logger.warning("[ATTACHMENT] temp_upload_failure file=%s err=%s", item["file_name"], e.error)
@@ -449,6 +456,7 @@ def _on_complaint_upload_progress(page: ft.Page, e: ft.FilePickerUploadEvent) ->
         return
 
     if item["done"]:
+        logger.info("[ATTACHMENT] DEBUG: item already done, skipping")
         return
 
     if (
@@ -469,7 +477,7 @@ def _on_complaint_upload_progress(page: ft.Page, e: ft.FilePickerUploadEvent) ->
             "is_temp": True,
         })
         _set_selected_files(page, selected)
-        logger.info("[ATTACHMENT] temp_upload_success file=%s size=%s", item["file_name"], actual_size)
+        logger.info("[ATTACHMENT] DEBUG: temp_upload_success file=%s size=%s selected_count=%s queue_len=%s", item["file_name"], actual_size, len(selected), len(queue))
         queue.pop(0)
         _set_upload_queue(page, queue)
         _set_upload_active(page, False)
@@ -496,11 +504,12 @@ def open_complaint_attachment_picker(page: ft.Page) -> None:
     picker = _ensure_complaint_picker(page)
     _set_picker_pending(page, True)
     _set_picker_opened_at(page, time.time())
-    logger.info("[ATTACHMENT] attachment_picker_open invocation=%s count=%s", invocation_id, len(selected))
+    logger.info("[ATTACHMENT] DEBUG: attachment_picker_open invocation=%s count=%s pending=%s", invocation_id, len(selected), _get_picker_pending(page))
     _notify_attachment_ui(page)
 
     async def _launch():
         try:
+            logger.info("[ATTACHMENT] DEBUG: _launch starting pick_files invocation=%s", invocation_id)
             files = await picker.pick_files(
                 file_type=ft.FilePickerFileType.CUSTOM,
                 allowed_extensions=ATTACHMENT_EXTENSIONS,
@@ -509,13 +518,18 @@ def open_complaint_attachment_picker(page: ft.Page) -> None:
                 cancel_upload_on_window_blur=False,
             )
             # Process returned files directly - Flet 0.86.5 returns list[FilePickerFile]
+            logger.info("[ATTACHMENT] DEBUG: pick_files returned files=%s invocation=%s", len(files or []), invocation_id)
+            for idx, f in enumerate(files or []):
+                logger.info("[ATTACHMENT] DEBUG: file[%s] id=%s name=%s size=%s path=%s bytes=%s", idx, getattr(f, "id", None), getattr(f, "name", None), getattr(f, "size", None), getattr(f, "path", None), "present" if getattr(f, "bytes", None) else "None")
             if _get_picker_invocation_id(page) != invocation_id:
+                logger.info("[ATTACHMENT] DEBUG: invocation superseded, returning")
                 return  # Superseded by newer invocation
             _set_picker_pending(page, False)
             _set_picker_opened_at(page, 0.0)
-            logger.info("[ATTACHMENT] attachment_picker_result files=%s", len(files or []))
+            logger.info("[ATTACHMENT] DEBUG: pending cleared, invocation=%s", invocation_id)
 
             if not files:
+                logger.info("[ATTACHMENT] DEBUG: no files selected, notifying UI")
                 _notify_attachment_ui(page)
                 return
 
@@ -543,13 +557,15 @@ def open_complaint_attachment_picker(page: ft.Page) -> None:
                         "size": f_size,
                         "is_temp": False,
                     })
-                    logger.info("[ATTACHMENT] Desktop/local path added: %s", f_name)
+                    logger.info("[ATTACHMENT] DEBUG: Desktop/local path added: %s, selected count=%s", f_name, len(selected))
                     _notify_attachment_ui(page)
                     continue
 
                 f_id = getattr(f, "id", None) or f_name
+                logger.info("[ATTACHMENT] DEBUG: queueing upload for %s (id=%s)", f_name, f_id)
                 _queue_complaint_upload(page, f_id, f_name, f_size, student_id)
             _set_selected_files(page, selected)
+            logger.info("[ATTACHMENT] DEBUG: _set_selected_files done, count=%s", len(selected))
 
         except Exception as ex:
             logger.warning("[ATTACHMENT] pick_files failed: %s", ex)
@@ -560,14 +576,22 @@ def open_complaint_attachment_picker(page: ft.Page) -> None:
                 _notify_attachment_ui(page)
 
     try:
-        if hasattr(page, "run_task"):
+        # Use asyncio.ensure_future directly on the running event loop.
+        # page.run_task() schedules but may not execute in web mode.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            asyncio.ensure_future(_launch())
+        elif hasattr(page, "run_task"):
+            # Fallback to page.run_task if no running loop
             page.run_task(_launch)
         else:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(_launch())
-            else:
-                loop.run_until_complete(_launch())
+            # Last resort: create new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(_launch())
     except Exception as ex:
         logger.warning("[ATTACHMENT] launch error: %s", ex)
         if _get_picker_invocation_id(page) == invocation_id:
@@ -820,10 +844,18 @@ def open_spreadsheet_import_picker(
                 _finish(None, "Unable to open file picker.")
 
     try:
-        if hasattr(page, "run_task"):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            asyncio.ensure_future(_launch())
+        elif hasattr(page, "run_task"):
             page.run_task(_launch)
         else:
-            asyncio.ensure_future(_launch())
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(_launch())
     except Exception as ex:
         logger.warning("[IMPORT] launch error: %s", ex)
         if _get_import_invocation_id(page) == invocation_id:
