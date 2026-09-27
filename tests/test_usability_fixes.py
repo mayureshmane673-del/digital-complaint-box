@@ -34,9 +34,8 @@ def test_mobile_pick_files_blur_setting():
     As of v1.1.0, the attachment picker uses:
     - cancel_upload_on_window_blur=False (prevents Android window blur from cancelling selection)
     - page-level persistent FilePicker (_dcb_file_picker)
-    - page-level selected_files (_dcb_selected_files) that survive reconnects
+    - session.store persistence for selected files across reconnects
     - with_data=False and allow_multiple=False to prevent mobile RAM bloat
-    - session.store persistence across reconnects
     - stable callbacks set once at picker creation
     - sequential upload queue
     """
@@ -48,7 +47,7 @@ def test_mobile_pick_files_blur_setting():
     # New architecture uses page_file_services
     assert "register_complaint_attachment_hooks" in st_src
     assert "open_complaint_attachment_picker" in st_src
-    assert "_dcb_selected_files" in st_src
+    assert "_get_selected_files" in st_src
     # Old settings (cancel_upload_on_window_blur, allow_multiple, with_data) are now in page_file_services
 
     pfs_src = inspect.getsource(pfs.open_complaint_attachment_picker)

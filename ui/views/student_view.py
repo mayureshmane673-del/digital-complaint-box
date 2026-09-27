@@ -39,6 +39,11 @@ from ui.components.page_file_services import (
     get_complaint_file_picker,
     register_complaint_attachment_hooks,
     open_complaint_attachment_picker,
+    _get_selected_files,
+    _set_selected_files,
+    _get_picker_pending,
+    _set_picker_pending,
+    _notify_attachment_ui,
 )
 from models.user import UserRole
 from models.complaint import (
@@ -490,15 +495,15 @@ class StudentView:
         )
 
         # File picker for attachments (Max 2)
-        # Use the page-level selected_files so state survives Android WebSocket reconnects.
+        # Attachment state is stored in page.session.store (persists across Android WebSocket reconnects).
         # When Android opens the file manager, the WebSocket may briefly disconnect.
         # app.py will call render_portal_view() which creates a new StudentView,
-        # but page._dcb_selected_files persists the already-selected files.
+        # but session store persists the already-selected files.
 
         files_display = ft.Column(spacing=4)
 
         def _get_count() -> int:
-            return len(self.page._dcb_selected_files)
+            return len(_get_selected_files(self.page))
 
         def _count_label() -> str:
             n = _get_count()
@@ -516,7 +521,7 @@ class StudentView:
 
         def update_attach_btn():
             n = _get_count()
-            pending = getattr(self.page, "_dcb_picker_pending", False)
+            pending = _get_picker_pending(self.page)
             attach_btn.disabled = (n >= 2) or pending
             if pending:
                 attach_btn.content = ft.Text("Opening Picker...")
@@ -553,9 +558,10 @@ class StudentView:
             self.page.update()
 
         def remove_file(idx: int):
-            pf = self.page._dcb_selected_files
-            if 0 <= idx < len(pf):
-                removed = pf.pop(idx)
+            files = _get_selected_files(self.page)
+            if 0 <= idx < len(files):
+                removed = files.pop(idx)
+                _set_selected_files(self.page, files)
                 if removed.get("is_temp") and removed.get("path"):
                     try:
                         p = removed["path"]
@@ -569,7 +575,7 @@ class StudentView:
 
         def refresh_files_display(update_page: bool = True):
             files_display.controls.clear()
-            for idx, f in enumerate(self.page._dcb_selected_files):
+            for idx, f in enumerate(_get_selected_files(self.page)):
                 f_name = f.get("name", "attachment")
                 f_size = f.get("size", 0)
                 size_str = f"{f_size / 1024:.1f} KB" if f_size else ""
@@ -614,7 +620,7 @@ class StudentView:
                     pass
 
 # Populate pre-existing attachments if any
-        if self.page._dcb_selected_files:
+        if _get_selected_files(self.page):
             refresh_files_display(update_page=False)
 
         register_complaint_attachment_hooks(
@@ -625,7 +631,7 @@ class StudentView:
         )
 
         def on_pick_attachment(e):
-            if getattr(self.page, "_dcb_picker_pending", False):
+            if _get_picker_pending(self.page):
                 attach_btn.disabled = True
                 attach_btn.content = ft.Text("Opening Picker...")
             open_complaint_attachment_picker(self.page)
@@ -720,7 +726,7 @@ class StudentView:
 
                 if ok and created_comp:
                     cid = created_comp["complaint_id"]
-                    for f_info in self.page._dcb_selected_files:
+                    for f_info in _get_selected_files(self.page):
                         try:
                             StorageService.upload_attachment(
                                 complaint_id=cid,
@@ -738,7 +744,7 @@ class StudentView:
                         except Exception as up_err:
                             logger.error("Error uploading attachment to Supabase: %s", up_err)
 
-                    self.page._dcb_selected_files.clear()
+                    _set_selected_files(self.page, [])
                     show_feedback_message(self.page, f"Complaint #{cid} registered successfully!", is_error=False)
                     self.cached_complaints = None
                     self._switch_view(2)  # Switch to My Complaints
