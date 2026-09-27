@@ -299,19 +299,28 @@ def test_staff_login_fast_query_and_department_attachment():
 
 
 def test_mobile_attachment_memory_settings():
-    """Verify StudentView pick_files uses memory-safe with_data=False and single-file selection."""
+    """Verify StudentView pick_files uses memory-safe with_data=False and single-file selection.
+
+    Flet 0.86.5 pick_files() returns selected files directly - no on_result callback needed.
+    """
     import inspect
     from ui.views.student_view import StudentView
     from ui.components import page_file_services as pfs
 
     src = inspect.getsource(pfs._ensure_complaint_picker)
-    assert "on_result" in src or "picker_result" in src
-    assert "_on_complaint_picker_result" in src
+    # Flet 0.86.5 has no on_result callback - pick_files returns files directly
+    assert "on_upload" in src
+    assert "_on_complaint_upload_progress" in src
+    # on_result should NOT be set
+    assert "on_result" not in src
 
     src2 = inspect.getsource(pfs.open_complaint_attachment_picker)
     assert "allow_multiple=False" in src2
     assert "with_data=False" in src2
     assert "cancel_upload_on_window_blur=False" in src2
+    # Verify pick_files return value is captured and processed
+    assert "files = await picker.pick_files" in src2
+    assert "_queue_complaint_upload" in src2
 
     # Button labels are in StudentView
     st_src = inspect.getsource(StudentView._render_new_complaint)

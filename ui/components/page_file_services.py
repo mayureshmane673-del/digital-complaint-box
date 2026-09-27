@@ -296,11 +296,9 @@ def _ensure_complaint_picker(page: ft.Page) -> ft.FilePicker:
     if picker is None:
         picker = ft.FilePicker()
         picker = _register_picker(page, picker, "_dcb_file_picker")
-        picker.on_result = _on_complaint_picker_result
         picker.on_upload = _on_complaint_upload_progress
     else:
         # Ensure callbacks remain stable across page rebuilds
-        picker.on_result = _on_complaint_picker_result
         picker.on_upload = _on_complaint_upload_progress
     return picker
 
@@ -503,13 +501,56 @@ def open_complaint_attachment_picker(page: ft.Page) -> None:
 
     async def _launch():
         try:
-            await picker.pick_files(
+            files = await picker.pick_files(
                 file_type=ft.FilePickerFileType.CUSTOM,
                 allowed_extensions=ATTACHMENT_EXTENSIONS,
                 allow_multiple=False,
                 with_data=False,
                 cancel_upload_on_window_blur=False,
             )
+            # Process returned files directly - Flet 0.86.5 returns list[FilePickerFile]
+            if _get_picker_invocation_id(page) != invocation_id:
+                return  # Superseded by newer invocation
+            _set_picker_pending(page, False)
+            _set_picker_opened_at(page, 0.0)
+            logger.info("[ATTACHMENT] attachment_picker_result files=%s", len(files or []))
+
+            if not files:
+                _notify_attachment_ui(page)
+                return
+
+            hooks = _get_attachment_hooks(page) or {}
+            student_id = hooks.get("student_id") or ""
+
+            selected = _get_selected_files(page)
+            for f in files:
+                if len(selected) >= 2:
+                    show_feedback_message(page, "Maximum 2 attachments allowed.", is_error=True)
+                    break
+                f_name = getattr(f, "name", "") or ""
+                f_size = getattr(f, "size", 0) or 0
+                valid, err = validate_attachment(f_name, f_size)
+                if not valid:
+                    show_feedback_message(page, err, is_error=True)
+                    continue
+
+                f_path = getattr(f, "path", None)
+                if f_path and os.path.exists(f_path):
+                    selected.append({
+                        "name": f_name,
+                        "path": f_path,
+                        "bytes": None,
+                        "size": f_size,
+                        "is_temp": False,
+                    })
+                    logger.info("[ATTACHMENT] Desktop/local path added: %s", f_name)
+                    _notify_attachment_ui(page)
+                    continue
+
+                f_id = getattr(f, "id", None) or f_name
+                _queue_complaint_upload(page, f_id, f_name, f_size, student_id)
+            _set_selected_files(page, selected)
+
         except Exception as ex:
             logger.warning("[ATTACHMENT] pick_files failed: %s", ex)
             if _get_picker_invocation_id(page) == invocation_id:
@@ -711,64 +752,67 @@ def open_spreadsheet_import_picker(
             )
             _process_import_queue()
 
-    def _on_result(e: ft.FilePickerResultEvent) -> None:
-        files = getattr(e, "files", None) or []
-        if not files:
-            _finish(None, "No file selected")
-            return
-
-        f = files[0]
-        f_name = getattr(f, "name", "") or ""
-        f_size = getattr(f, "size", 0) or 0
-        name_lower = f_name.lower()
-        if not (name_lower.endswith(".xlsx") or name_lower.endswith(".xls") or name_lower.endswith(".csv")):
-            _finish(None, f"Invalid file type: {f_name}")
-            return
-        if f_size and f_size > max_bytes:
-            _finish(None, "File exceeds 5MB limit.")
-            return
-
-        if f.path and os.path.exists(f.path):
-            _finish({"name": f_name, "path": f.path, "bytes": None, "is_temp": False}, f"Selected: {f_name}")
-            return
-
-        on_busy(True, f"Uploading {f_name}...")
-        ext = os.path.splitext(f_name)[1].lower()
-        temp_rel_path = f"temp/imports/{uuid.uuid4().hex}{ext}"
-        try:
-            upload_url = page.get_upload_url(temp_rel_path, 3600)
-        except Exception as ex:
-            logger.warning("[IMPORT] get_upload_url failed: %s", ex)
-            _finish(None, "Upload preparation failed.")
-            return
-
-        abs_disk_path = os.path.realpath(os.path.join(str(Path("uploads").resolve()), temp_rel_path))
-
-        upload_item = {
-            "file_id": getattr(f, "id", None) or f_name,
-            "file_name": f_name,
-            "abs_disk_path": abs_disk_path,
-            "upload_url": upload_url,
-            "done": False,
-        }
-        queue = _get_import_upload_queue(page)
-        queue.append(upload_item)
-        _set_import_upload_queue(page, queue)
-        _process_import_queue()
-
-    # Stable callbacks for the lifetime of the picker - set BEFORE launching
+    # Stable upload callback for the lifetime of the picker
     picker.on_upload = _on_import_upload
-    picker.on_result = _on_result
 
     async def _launch():
         try:
-            await picker.pick_files(
+            files = await picker.pick_files(
                 file_type=ft.FilePickerFileType.CUSTOM,
                 allowed_extensions=IMPORT_EXTENSIONS,
                 allow_multiple=False,
                 with_data=False,
                 cancel_upload_on_window_blur=False,
             )
+            # Process returned files directly - Flet 0.86.5 returns list[FilePickerFile]
+            if _get_import_invocation_id(page) != invocation_id:
+                return  # Superseded by newer invocation
+            _set_import_picker_pending(page, False)
+            logger.info("[IMPORT] pick_files returned files=%s", len(files or []))
+
+            if not files:
+                _finish(None, "No file selected")
+                return
+
+            f = files[0]
+            f_name = getattr(f, "name", "") or ""
+            f_size = getattr(f, "size", 0) or 0
+            name_lower = f_name.lower()
+            if not (name_lower.endswith(".xlsx") or name_lower.endswith(".xls") or name_lower.endswith(".csv")):
+                _finish(None, f"Invalid file type: {f_name}")
+                return
+            if f_size and f_size > max_bytes:
+                _finish(None, "File exceeds 5MB limit.")
+                return
+
+            if f.path and os.path.exists(f.path):
+                _finish({"name": f_name, "path": f.path, "bytes": None, "is_temp": False}, f"Selected: {f_name}")
+                return
+
+            on_busy(True, f"Uploading {f_name}...")
+            ext = os.path.splitext(f_name)[1].lower()
+            temp_rel_path = f"temp/imports/{uuid.uuid4().hex}{ext}"
+            try:
+                upload_url = page.get_upload_url(temp_rel_path, 3600)
+            except Exception as ex:
+                logger.warning("[IMPORT] get_upload_url failed: %s", ex)
+                _finish(None, "Upload preparation failed.")
+                return
+
+            abs_disk_path = os.path.realpath(os.path.join(str(Path("uploads").resolve()), temp_rel_path))
+
+            upload_item = {
+                "file_id": getattr(f, "id", None) or f_name,
+                "file_name": f_name,
+                "abs_disk_path": abs_disk_path,
+                "upload_url": upload_url,
+                "done": False,
+            }
+            queue = _get_import_upload_queue(page)
+            queue.append(upload_item)
+            _set_import_upload_queue(page, queue)
+            _process_import_queue()
+
         except Exception as ex:
             logger.warning("[IMPORT] pick_files failed: %s", ex)
             if _get_import_invocation_id(page) == invocation_id:
