@@ -43,6 +43,8 @@ from ui.components.page_file_services import (
     _set_selected_files,
     _get_picker_pending,
     _set_picker_pending,
+    _get_upload_active,
+    _get_upload_queue,
     _notify_attachment_ui,
 )
 from models.user import UserRole
@@ -522,9 +524,12 @@ class StudentView:
         def update_attach_btn():
             n = _get_count()
             pending = _get_picker_pending(self.page)
-            attach_btn.disabled = (n >= 2) or pending
+            uploading = _get_upload_active(self.page) or bool(_get_upload_queue(self.page))
+            attach_btn.disabled = (n >= 2) or pending or uploading
             if pending:
                 attach_btn.content = ft.Text("Opening Picker...")
+            elif uploading:
+                attach_btn.content = ft.Text("Uploading...")
             else:
                 attach_btn.content = ft.Text(_count_label())
             try:
@@ -631,9 +636,8 @@ class StudentView:
         )
 
         def on_pick_attachment(e):
-            if _get_picker_pending(self.page):
-                attach_btn.disabled = True
-                attach_btn.content = ft.Text("Opening Picker...")
+            if _get_picker_pending(self.page) or _get_upload_active(self.page):
+                return
             open_complaint_attachment_picker(self.page)
 
         attach_btn.on_click = on_pick_attachment

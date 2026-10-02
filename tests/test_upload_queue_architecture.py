@@ -38,6 +38,7 @@ from ui.components.page_file_services import (
     _set_picker_invocation_id,
     _set_picker_pending,
     _set_picker_opened_at,
+    clear_stale_picker_pending,
     open_complaint_attachment_picker,
     ensure_import_picker,
     open_spreadsheet_import_picker,
@@ -324,13 +325,17 @@ class TestUploadQueueArchitecture:
         f_name = file1.name
         f_size = file1.size
         _queue_complaint_upload(page, file1.id, f_name, f_size, "student-uuid")
-        _set_selected_files(page, selected + [{"name": f_name, "path": "/tmp/photo1.jpg", "bytes": None, "size": f_size, "is_temp": False}])
 
         # Reset pending (as _launch() does after pick_files returns)
         _set_picker_pending(page, False)
         _set_picker_opened_at(page, 0.0)
 
-        # Second invocation should work
+        # First upload completes
+        upload_evt = _make_file_picker_upload_event(f_name, progress=1.0, status="done")
+        upload_evt.control = picker
+        picker.on_upload(upload_evt)
+
+        # Second invocation should work after first completes
         open_complaint_attachment_picker(page)
         assert _get_picker_pending(page) is True
         assert _get_picker_invocation_id(page) == 2
@@ -538,6 +543,75 @@ class TestImportPickerArchitecture:
         open_spreadsheet_import_picker(page, on_selected=on_selected, on_busy=on_busy)
         assert _get_import_invocation_id(page) == inv1 + 1
 
+    def test_import_upload_partial_progress_below_99_does_not_mark_complete(self):
+        """Verify that an intermediate import upload event (progress < 0.99) does NOT mark
+        the import upload complete, even if a non-empty disk file exists.
+        Verify that progress=1.0 or status='done' does complete the import.
+        """
+        page = _make_page_with_store()
+        _init_session_state(page)
+
+        from ui.components.page_file_services import (
+            _set_import_upload_queue,
+            _set_import_upload_active,
+        )
+
+        selected_results = []
+        busy_states = []
+
+        def on_selected(info):
+            selected_results.append(info)
+
+        def on_busy(busy, msg):
+            busy_states.append({"busy": busy, "msg": msg})
+
+        open_spreadsheet_import_picker(page, on_selected=on_selected, on_busy=on_busy)
+        picker = getattr(page, "_dcb_import_file_picker")
+
+        disk_path = os.path.realpath("uploads/temp/imports/test_import.xlsx")
+        os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+        try:
+            with open(disk_path, "wb") as f:
+                f.write(b"x" * 1024)
+
+            # Enqueue an import item
+            queue_item = {
+                "file_id": 1,
+                "file_name": "students.xlsx",
+                "abs_disk_path": disk_path,
+                "upload_url": "http://upload/test",
+                "done": False,
+            }
+            _set_import_upload_queue(page, [queue_item])
+            _set_import_upload_active(page, True)
+
+            # Fire partial upload event (progress=0.45, status=None)
+            e_partial = _make_file_picker_upload_event("students.xlsx", progress=0.45, status=None)
+            picker.on_upload(e_partial)
+
+            # Assert NOT completed
+            assert queue_item["done"] is False
+            assert len(_get_import_upload_queue(page)) == 1
+            assert _get_import_upload_active(page) is True
+            assert len(selected_results) == 0
+
+            # Fire final upload event (progress=1.0, status="done")
+            e_final = _make_file_picker_upload_event("students.xlsx", progress=1.0, status="done")
+            picker.on_upload(e_final)
+
+            # Assert completed
+            assert len(_get_import_upload_queue(page)) == 0
+            assert _get_import_upload_active(page) is False
+            assert len(selected_results) == 1
+            assert selected_results[0]["name"] == "students.xlsx"
+            assert selected_results[0]["path"] == disk_path
+        finally:
+            if os.path.exists(disk_path):
+                try:
+                    os.remove(disk_path)
+                except OSError:
+                    pass
+
 
 class TestStalePickerDetection:
     """Tests for stale picker pending flag detection."""
@@ -627,6 +701,330 @@ class TestAttachmentStatePersistence:
         # The key point is it's not stuck True from previous page
         pending = _get_picker_pending(page2)
         assert pending in (True, False)  # State depends on stale detection
+
+    def test_one_argument_on_upload_callback_invocation_completes_queue(self):
+        """Regression test for 1-argument on_upload dispatch from Flet runtime.
+        Verifies that picker.on_upload(e) does NOT raise TypeError, completes the
+        queue, records the selected file, and re-enables the UI.
+        """
+        page = _make_page_with_store()
+        _init_session_state(page)
+
+        ui_events = []
+        btn_states = []
+
+        def mock_refresh():
+            ui_events.append("refresh")
+
+        def mock_update_btn():
+            n = len(_get_selected_files(page))
+            pending = _get_picker_pending(page)
+            uploading = _get_upload_active(page) or bool(_get_upload_queue(page))
+            btn_states.append({"disabled": (n >= 2) or pending or uploading, "count": n})
+
+        register_complaint_attachment_hooks(
+            page,
+            refresh_files_display=mock_refresh,
+            update_attach_btn=mock_update_btn,
+            student_id="student-test-uuid",
+        )
+
+        picker = _ensure_complaint_picker(page)
+        _setup_mocked_upload(page)
+
+        # Queue an upload
+        _queue_complaint_upload(page, "test_file.png", "test_file.png", 2048, "student-test-uuid")
+
+        assert _get_upload_active(page) is True
+        assert len(_get_upload_queue(page)) == 1
+
+        # Create upload event matching Flet's runtime structure
+        upload_evt = _make_file_picker_upload_event("test_file.png", progress=1.0, status="done")
+        upload_evt.control = picker
+
+        # Invoke via picker.on_upload with ONE argument (as Flet's event dispatcher does)
+        picker.on_upload(upload_evt)
+
+        # Assert queue completed
+        assert _get_upload_active(page) is False
+        assert len(_get_upload_queue(page)) == 0
+
+        # Assert selected file was recorded
+        selected = _get_selected_files(page)
+        assert len(selected) == 1
+        assert selected[0]["name"] == "test_file.png"
+
+        # Assert UI callbacks were triggered
+        assert "refresh" in ui_events
+        assert len(btn_states) > 0
+        # Final button state must not be disabled
+        assert btn_states[-1]["disabled"] is False
+        assert btn_states[-1]["count"] == 1
+
+    def test_one_argument_on_upload_error_cleans_up_and_reenables_ui(self):
+        """Regression test verifying that an upload error via 1-argument on_upload(e)
+        cleans up the queue, resets upload_active to False, and re-enables the UI.
+        """
+        page = _make_page_with_store()
+        _init_session_state(page)
+
+        btn_states = []
+
+        def mock_update_btn():
+            n = len(_get_selected_files(page))
+            pending = _get_picker_pending(page)
+            uploading = _get_upload_active(page) or bool(_get_upload_queue(page))
+            btn_states.append({"disabled": (n >= 2) or pending or uploading, "uploading": uploading})
+
+        register_complaint_attachment_hooks(
+            page,
+            refresh_files_display=lambda: None,
+            update_attach_btn=mock_update_btn,
+            student_id="student-test-uuid",
+        )
+
+        picker = _ensure_complaint_picker(page)
+        _setup_mocked_upload(page)
+
+        # Queue an upload
+        _queue_complaint_upload(page, "error_file.png", "error_file.png", 2048, "student-test-uuid")
+        assert _get_upload_active(page) is True
+
+        # Simulate Flet 1-arg error event
+        error_evt = _make_file_picker_upload_event("error_file.png", progress=None, status=None)
+        error_evt.error = "Connection reset by peer"
+        error_evt.control = picker
+
+        # Call with 1 argument
+        picker.on_upload(error_evt)
+
+        # Queue must be cleared and active must be False
+        assert _get_upload_active(page) is False
+        assert len(_get_upload_queue(page)) == 0
+        assert len(_get_selected_files(page)) == 0
+
+        # Final button state must not be uploading or disabled
+        assert len(btn_states) > 0
+        assert btn_states[-1]["uploading"] is False
+        assert btn_states[-1]["disabled"] is False
+
+    def test_button_state_is_disabled_uploading_during_upload_and_reenabled_after(self):
+        """Regression test asserting the button state DURING the upload (disabled, 'Uploading...'),
+        and re-enabled after completion.
+        """
+        page = _make_page_with_store()
+        _init_session_state(page)
+
+        button_history = []
+
+        def mock_update_btn():
+            n = len(_get_selected_files(page))
+            pending = _get_picker_pending(page)
+            uploading = _get_upload_active(page) or bool(_get_upload_queue(page))
+            text = "Opening Picker..." if pending else ("Uploading..." if uploading else f"Add Attachment ({n}/2)")
+            disabled = (n >= 2) or pending or uploading
+            button_history.append({"disabled": disabled, "text": text, "uploading": uploading, "count": n})
+
+        register_complaint_attachment_hooks(
+            page,
+            refresh_files_display=lambda: None,
+            update_attach_btn=mock_update_btn,
+            student_id="student-test-uuid",
+        )
+
+        picker = _ensure_complaint_picker(page)
+        _setup_mocked_upload(page)
+
+        # 1. Queue an upload to start uploading
+        _queue_complaint_upload(page, "doc.pdf", "doc.pdf", 4096, "student-test-uuid")
+
+        # Verify state DURING upload
+        assert _get_upload_active(page) is True
+        assert len(button_history) > 0
+        current_btn = button_history[-1]
+        assert current_btn["disabled"] is True
+        assert current_btn["text"] == "Uploading..."
+        assert current_btn["uploading"] is True
+
+        # 2. Complete upload via 1-arg on_upload event
+        upload_evt = _make_file_picker_upload_event("doc.pdf", progress=1.0, status="done")
+        upload_evt.control = picker
+        picker.on_upload(upload_evt)
+
+        # Verify state AFTER completion
+        assert _get_upload_active(page) is False
+        assert len(_get_upload_queue(page)) == 0
+        final_btn = button_history[-1]
+        assert final_btn["disabled"] is False
+        assert final_btn["text"] == "Add Attachment (1/2)"
+        assert final_btn["uploading"] is False
+        assert final_btn["count"] == 1
+
+    def test_upload_exceeding_10_seconds_not_cleared_by_stale_picker_and_blocks_second_picker(self):
+        """Regression test verifying that an upload taking longer than 10 seconds is NOT
+        cleared by clear_stale_picker_pending(), and blocks opening a second picker until completion.
+        """
+        page = _make_page_with_store()
+        _init_session_state(page)
+
+        btn_states = []
+
+        def mock_update_btn():
+            n = len(_get_selected_files(page))
+            pending = _get_picker_pending(page)
+            uploading = _get_upload_active(page) or bool(_get_upload_queue(page))
+            btn_states.append({"disabled": (n >= 2) or pending or uploading, "uploading": uploading})
+
+        register_complaint_attachment_hooks(
+            page,
+            refresh_files_display=lambda: None,
+            update_attach_btn=mock_update_btn,
+            student_id="student-test-uuid",
+        )
+
+        picker = _ensure_complaint_picker(page)
+        _setup_mocked_upload(page)
+
+        # Start an upload
+        _queue_complaint_upload(page, "large_file.png", "large_file.png", 5000000, "student-test-uuid")
+        assert _get_upload_active(page) is True
+
+        # Simulate 25 seconds passing (exceeding PICKER_STALE_SECONDS = 10s)
+        _set_picker_opened_at(page, time.time() - 25.0)
+
+        # Invoke clear_stale_picker_pending
+        clear_stale_picker_pending(page)
+
+        # upload_active MUST NOT be cleared while an upload is actively transferring!
+        assert _get_upload_active(page) is True
+        assert len(_get_upload_queue(page)) == 1
+
+        # Attempt to open a second picker while upload is active
+        # It must be rejected and must NOT open the picker
+        with patch("ui.components.page_file_services.show_feedback_message") as mock_fb:
+            open_complaint_attachment_picker(page)
+            # Must show waiting feedback message
+            mock_fb.assert_called_once()
+            args, _ = mock_fb.call_args
+            assert "Upload in progress" in args[1]
+            # picker_pending must NOT be set to True
+            assert _get_picker_pending(page) is False
+
+        # Now complete the upload genuinely
+        upload_evt = _make_file_picker_upload_event("large_file.png", progress=1.0, status="done")
+        upload_evt.control = picker
+        picker.on_upload(upload_evt)
+
+        # Upload completes and UI unblocks
+        assert _get_upload_active(page) is False
+        assert len(_get_upload_queue(page)) == 0
+        assert len(_get_selected_files(page)) == 1
+        assert btn_states[-1]["disabled"] is False
+
+    def test_partial_upload_progress_below_99_does_not_mark_complete(self):
+        """Verify that intermediate progress events (< 0.99) do not prematurely complete
+        the upload or add the file to selected_files even if the file exists on disk.
+        Verify that final progress (>= 0.99 or status='done') completes the upload.
+        """
+        page = _make_page_with_store()
+        _init_session_state(page)
+
+        refreshed = []
+        button_states = []
+
+        def mock_refresh():
+            refreshed.append(True)
+
+        def mock_update_btn():
+            n = len(_get_selected_files(page))
+            pending = _get_picker_pending(page)
+            uploading = _get_upload_active(page) or bool(_get_upload_queue(page))
+            text = "Opening Picker..." if pending else ("Uploading..." if uploading else f"Add Attachment ({n}/2)")
+            disabled = (n >= 2) or pending or uploading
+            button_states.append({"disabled": disabled, "text": text, "uploading": uploading, "count": n})
+
+        register_complaint_attachment_hooks(
+            page,
+            refresh_files_display=mock_refresh,
+            update_attach_btn=mock_update_btn,
+            student_id="student-test-uuid",
+        )
+
+        picker = _ensure_complaint_picker(page)
+        _setup_mocked_upload(page)
+
+        file_name = "partial_evidence.png"
+        file_size = 100000
+        _queue_complaint_upload(page, file_name, file_name, file_size, "student-test-uuid")
+
+        queue = _get_upload_queue(page)
+        assert len(queue) == 1
+        item = queue[0]
+        disk_path = item["abs_disk_path"]
+
+        os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+        target_path = Path(disk_path)
+        try:
+            # Simulate initial disk file creation with partial content (first 25 KB streamed)
+            target_path.write_bytes(b"x" * 25000)
+            assert os.path.exists(disk_path)
+            assert os.path.getsize(disk_path) == 25000
+
+            refreshed.clear()
+            button_states.clear()
+
+            # Intermediate event 1: 25% progress
+            evt_25 = _make_file_picker_upload_event(file_name, progress=0.25, status=None)
+            evt_25.control = picker
+            picker.on_upload(evt_25)
+
+            # Must NOT be completed
+            assert item["done"] is False
+            assert len(_get_upload_queue(page)) == 1
+            assert _get_upload_active(page) is True
+            assert len(_get_selected_files(page)) == 0
+            assert len(refreshed) == 0
+
+            # Intermediate event 2: 75% progress (with 75 KB streamed)
+            target_path.write_bytes(b"x" * 75000)
+            assert os.path.getsize(disk_path) == 75000
+
+            evt_75 = _make_file_picker_upload_event(file_name, progress=0.75, status=None)
+            evt_75.control = picker
+            picker.on_upload(evt_75)
+
+            # Must NOT be completed
+            assert item["done"] is False
+            assert len(_get_upload_queue(page)) == 1
+            assert _get_upload_active(page) is True
+            assert len(_get_selected_files(page)) == 0
+            assert len(refreshed) == 0
+
+            # Final event: 100% written and progress=1.0, status='done'
+            target_path.write_bytes(b"x" * file_size)
+            assert os.path.getsize(disk_path) == file_size
+
+            evt_final = _make_file_picker_upload_event(file_name, progress=1.0, status="done")
+            evt_final.control = picker
+            picker.on_upload(evt_final)
+
+            # Now it must be fully completed
+            assert item["done"] is True
+            assert len(_get_upload_queue(page)) == 0
+            assert _get_upload_active(page) is False
+            selected = _get_selected_files(page)
+            assert len(selected) == 1
+            assert selected[0]["name"] == file_name
+            assert selected[0]["size"] == file_size
+            assert len(refreshed) > 0
+            assert button_states[-1]["disabled"] is False
+            assert button_states[-1]["text"] == "Add Attachment (1/2)"
+        finally:
+            if os.path.exists(disk_path):
+                try:
+                    os.remove(disk_path)
+                except OSError:
+                    pass
 
 
 if __name__ == "__main__":

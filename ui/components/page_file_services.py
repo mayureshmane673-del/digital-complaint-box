@@ -240,14 +240,22 @@ def ensure_complaint_attachment_state(page: ft.Page) -> None:
 
 
 def clear_stale_picker_pending(page: ft.Page) -> None:
-    """Reset a stuck pending flag after reconnect or abandoned picker."""
+    """Reset a stuck picker_pending flag if the OS file dialog was abandoned.
+
+    Does NOT clear upload_active while an upload is actively transferring.
+    """
     _init_session_state(page)
     if not _get_picker_pending(page):
         return
+    # If an upload is actively transferring, the picker dialog has already returned; do not clear
+    if _get_upload_active(page):
+        return
     opened = _get_picker_opened_at(page)
     if opened and (time.time() - opened) > PICKER_STALE_SECONDS:
-        logger.info("[ATTACHMENT] Clearing stale picker pending flag")
+        logger.info("[ATTACHMENT] Clearing stale picker pending flag (elapsed=%.1fs)", time.time() - opened)
         _set_picker_pending(page, False)
+        _set_picker_opened_at(page, 0.0)
+        _notify_attachment_ui(page)
 
 
 def register_complaint_attachment_hooks(
@@ -294,12 +302,16 @@ def get_complaint_file_picker(page: ft.Page) -> ft.FilePicker:
 def _ensure_complaint_picker(page: ft.Page) -> ft.FilePicker:
     picker = getattr(page, "_dcb_file_picker", None)
     if picker is None:
-        picker = ft.FilePicker()
+        picker = ft.FilePicker(on_upload=_on_complaint_upload_progress)
+        setattr(picker, "_dcb_page", page)
         picker = _register_picker(page, picker, "_dcb_file_picker")
-        picker.on_upload = _on_complaint_upload_progress
-    else:
-        # Ensure callbacks remain stable across page rebuilds
-        picker.on_upload = _on_complaint_upload_progress
+    # Attach page reference directly to picker for 1-argument event resolution
+    setattr(picker, "_dcb_page", page)
+    picker.on_upload = _on_complaint_upload_progress
+    try:
+        picker.update()
+    except Exception:
+        pass
     return picker
 
 
@@ -342,7 +354,9 @@ def _on_complaint_picker_result(page: ft.Page, e: ft.FilePickerResultEvent) -> N
             _notify_attachment_ui(page)
             continue
 
-        f_id = getattr(f, "id", None) or f_name
+        f_id = getattr(f, "id", None)
+        if f_id is None:
+            f_id = f_name
         _queue_complaint_upload(page, f_id, f_name, f_size, student_id)
     _set_selected_files(page, selected)
 
@@ -396,14 +410,26 @@ def _process_upload_queue(page: ft.Page) -> None:
     item = queue[0]
     _set_upload_active(page, True)
     logger.info("[ATTACHMENT] DEBUG: Starting upload: %s (queue len=%s, upload_active=%s)", item["file_name"], len(queue), _get_upload_active(page))
+    _notify_attachment_ui(page)
 
     picker = _ensure_complaint_picker(page)
     try:
+        f_id = item.get("file_id")
+        if isinstance(f_id, str):
+            try:
+                upload_id = int(f_id)
+            except ValueError:
+                upload_id = None
+        elif isinstance(f_id, int):
+            upload_id = f_id
+        else:
+            upload_id = None
+
         # picker.upload is a coroutine function; pass it to run_task with args
         upload_args = [
             ft.FilePickerUploadFile(
                 name=item["file_name"],
-                id=item["file_id"],
+                id=upload_id,
                 upload_url=item["upload_url"],
                 method="PUT",
             )
@@ -423,33 +449,76 @@ def _process_upload_queue(page: ft.Page) -> None:
     except Exception as ex:
         logger.warning("[ATTACHMENT] upload() failed for %s: %s", item["file_name"], ex)
         show_feedback_message(page, f"Upload failed for {item['file_name']}.", is_error=True)
-        queue.pop(0)
-        _set_upload_queue(page, queue)
+        queue = _get_upload_queue(page)
+        if queue:
+            queue.pop(0)
+            _set_upload_queue(page, queue)
         _set_upload_active(page, False)
         _process_upload_queue(page)
         _notify_attachment_ui(page)
 
 
-def _on_complaint_upload_progress(page: ft.Page, e: ft.FilePickerUploadEvent) -> None:
-    """Single stable upload progress handler - dispatches to queued item by file_name."""
+def _on_complaint_upload_progress(page_or_e: Any, e: Optional[ft.FilePickerUploadEvent] = None) -> None:
+    """Single stable upload progress handler - dispatches to queued item by file_name.
+
+    Supports both 1-arg Flet event dispatch: picker.on_upload(e)
+    and 2-arg direct calls: _on_complaint_upload_progress(page, e).
+    """
+    if e is not None:
+        page = page_or_e
+        event = e
+    else:
+        event = page_or_e
+        ctrl = getattr(event, "control", None)
+        page = getattr(ctrl, "_dcb_page", None)
+        if page is None:
+            try:
+                page = getattr(event, "page", None)
+            except Exception:
+                page = None
+        if page is None and ctrl is not None:
+            try:
+                page = getattr(ctrl, "page", None)
+            except Exception:
+                page = None
+        if page is None:
+            try:
+                from flet.controls.context import _context_page
+                page = _context_page.get()
+            except Exception:
+                page = None
+
+    if page is None:
+        logger.warning("[ATTACHMENT] _on_complaint_upload_progress called without page reference")
+        return
+
     queue = _get_upload_queue(page)
     if not queue:
         logger.info("[ATTACHMENT] DEBUG: on_upload called but queue empty")
+        _set_upload_active(page, False)
+        _notify_attachment_ui(page)
         return
 
     item = queue[0]
+    evt_file_name = getattr(event, "file_name", None)
     # FilePickerUploadEvent has file_name, not file_id. Match by file_name.
-    if e.file_name != item["file_name"]:
-        logger.debug("[ATTACHMENT] DEBUG: Upload event for unknown file_name=%s (expected=%s)", e.file_name, item["file_name"])
+    if evt_file_name != item["file_name"]:
+        logger.debug("[ATTACHMENT] DEBUG: Upload event for unknown file_name=%s (expected=%s)", evt_file_name, item["file_name"])
         return
 
-    logger.info("[ATTACHMENT] DEBUG: on_upload event file_name=%s progress=%s status=%s error=%s", e.file_name, getattr(e, "progress", None), getattr(e, "status", None), getattr(e, "error", None))
+    evt_progress = getattr(event, "progress", None)
+    evt_status = getattr(event, "status", None)
+    evt_error = getattr(event, "error", None)
 
-    if e.error:
-        logger.warning("[ATTACHMENT] temp_upload_failure file=%s err=%s", item["file_name"], e.error)
-        show_feedback_message(page, f"Upload error for {item['file_name']}: {e.error}", is_error=True)
-        queue.pop(0)
-        _set_upload_queue(page, queue)
+    logger.info("[ATTACHMENT] DEBUG: on_upload event file_name=%s progress=%s status=%s error=%s", evt_file_name, evt_progress, evt_status, evt_error)
+
+    if evt_error:
+        logger.warning("[ATTACHMENT] temp_upload_failure file=%s err=%s", item["file_name"], evt_error)
+        show_feedback_message(page, f"Upload error for {item['file_name']}: {evt_error}", is_error=True)
+        queue = _get_upload_queue(page)
+        if queue:
+            queue.pop(0)
+            _set_upload_queue(page, queue)
         _set_upload_active(page, False)
         _process_upload_queue(page)
         _notify_attachment_ui(page)
@@ -460,9 +529,8 @@ def _on_complaint_upload_progress(page: ft.Page, e: ft.FilePickerUploadEvent) ->
         return
 
     if (
-        (e.progress is not None and e.progress >= 0.99)
-        or getattr(e, "status", None) == "done"
-        or (os.path.exists(item["abs_disk_path"]) and os.path.getsize(item["abs_disk_path"]) > 0)
+        (evt_progress is not None and evt_progress >= 0.99)
+        or evt_status == "done"
     ):
         item["done"] = True
         actual_size = item["file_size"]
@@ -478,8 +546,10 @@ def _on_complaint_upload_progress(page: ft.Page, e: ft.FilePickerUploadEvent) ->
         })
         _set_selected_files(page, selected)
         logger.info("[ATTACHMENT] DEBUG: temp_upload_success file=%s size=%s selected_count=%s queue_len=%s", item["file_name"], actual_size, len(selected), len(queue))
-        queue.pop(0)
-        _set_upload_queue(page, queue)
+        queue = _get_upload_queue(page)
+        if queue:
+            queue.pop(0)
+            _set_upload_queue(page, queue)
         _set_upload_active(page, False)
         _process_upload_queue(page)
         _notify_attachment_ui(page)
@@ -496,6 +566,9 @@ def open_complaint_attachment_picker(page: ft.Page) -> None:
         return
     if _get_picker_pending(page):
         show_feedback_message(page, "File picker already open.", is_error=False)
+        return
+    if _get_upload_active(page) or bool(_get_upload_queue(page)):
+        show_feedback_message(page, "Upload in progress. Please wait.", is_error=False)
         return
 
     invocation_id = _get_picker_invocation_id(page) + 1
@@ -561,11 +634,14 @@ def open_complaint_attachment_picker(page: ft.Page) -> None:
                     _notify_attachment_ui(page)
                     continue
 
-                f_id = getattr(f, "id", None) or f_name
+                f_id = getattr(f, "id", None)
+                if f_id is None:
+                    f_id = f_name
                 logger.info("[ATTACHMENT] DEBUG: queueing upload for %s (id=%s)", f_name, f_id)
                 _queue_complaint_upload(page, f_id, f_name, f_size, student_id)
             _set_selected_files(page, selected)
             logger.info("[ATTACHMENT] DEBUG: _set_selected_files done, count=%s", len(selected))
+            _notify_attachment_ui(page)
 
         except Exception as ex:
             logger.warning("[ATTACHMENT] pick_files failed: %s", ex)
@@ -672,11 +748,17 @@ def _set_import_invocation_id(page: ft.Page, value: int) -> None:
         setattr(page, IMPORT_SESSION_KEY_INVOCATION_ID, value)
 
 
+def _default_import_upload_noop(e: Any) -> None:
+    pass
+
+
 def ensure_import_picker(page: ft.Page) -> ft.FilePicker:
     picker = getattr(page, "_dcb_import_file_picker", None)
     if picker is None:
-        picker = ft.FilePicker()
+        picker = ft.FilePicker(on_upload=_default_import_upload_noop)
+        setattr(picker, "_dcb_page", page)
         picker = _register_picker(page, picker, "_dcb_import_file_picker")
+    setattr(picker, "_dcb_page", page)
     return picker
 
 
@@ -764,7 +846,6 @@ def open_spreadsheet_import_picker(
         if (
             (e.progress is not None and e.progress >= 0.99)
             or getattr(e, "status", None) == "done"
-            or (os.path.exists(current["abs_disk_path"]) and os.path.getsize(current["abs_disk_path"]) > 0)
         ):
             current["done"] = True
             queue.pop(0)
@@ -778,6 +859,10 @@ def open_spreadsheet_import_picker(
 
     # Stable upload callback for the lifetime of the picker
     picker.on_upload = _on_import_upload
+    try:
+        picker.update()
+    except Exception:
+        pass
 
     async def _launch():
         try:
