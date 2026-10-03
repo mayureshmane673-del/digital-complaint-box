@@ -53,6 +53,12 @@ from models.complaint import (
     PRACTICAL_SUBCATEGORIES_CONFIG,
     get_default_priority
 )
+from services.draft_recovery_service import (
+    get_current_complaint_draft,
+    save_complaint_draft,
+    clear_complaint_draft,
+    save_active_tab,
+)
 
 BASELINE_SUBCATEGORIES = PRACTICAL_SUBCATEGORIES
 
@@ -125,6 +131,7 @@ class StudentView:
                 self.page.session.store.set("active_tab_index", index)
         except Exception:
             pass
+        save_active_tab(self.page, index, owner_id=self.student_id)
         if index == 0:
             # Show skeleton immediately, then load dashboard data
             if self.cached_complaints is None:
@@ -283,35 +290,86 @@ class StudentView:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        title_field = ft.TextField(label="Complaint Title", hint_text="Brief summary of the issue", dense=True)
+        draft = get_current_complaint_draft(self.page, expected_owner_id=self.student_id) or {}
+        init_title = draft.get("title", "")
+        init_desc = draft.get("description", "")
+        init_cat = draft.get("category_id")
+        init_sub = draft.get("subcategory_id")
+        init_loc = draft.get("location_id")
+        init_loc_custom = draft.get("location_custom", "")
+        init_cat_custom = draft.get("category_custom", "")
+        init_pri = draft.get("priority", "Low")
+        init_anon = bool(draft.get("is_anonymous", False))
+        init_hostel = bool(draft.get("is_hostel", False))
 
-        char_counter = ft.Text("0 / 1000 characters (min 10)", size=11, color=colors["text_muted"])
+        title_field = ft.TextField(
+            label="Complaint Title",
+            hint_text="Brief summary of the issue",
+            value=init_title,
+            dense=True
+        )
+
+        desc_len = len(init_desc)
+        char_counter = ft.Text(
+            f"{desc_len} / 1000 characters (min 10)",
+            size=11,
+            color="#059669" if (10 <= desc_len <= 1000) else ("#dc2626" if desc_len > 1000 else colors["text_muted"])
+        )
         desc_field = ft.TextField(
             label="Detailed Description",
             hint_text="Explain the grievance clearly with location specifics (10 to 1000 characters).",
+            value=init_desc,
             multiline=True,
             min_lines=3,
             max_lines=6,
             dense=True
         )
 
+        def save_draft_state():
+            try:
+                subcat_val = None
+                if hasattr(self, "subcategory_dropdown") and self.subcategory_dropdown:
+                    subcat_val = self.subcategory_dropdown.value
+                cat_val = getattr(self, "category_dropdown", None).value if hasattr(self, "category_dropdown") and self.category_dropdown else None
+                d = {
+                    "owner_id": str(self.student_id),
+                    "title": title_field.value or "",
+                    "description": desc_field.value or "",
+                    "category_id": cat_val,
+                    "subcategory_id": subcat_val,
+                    "location_id": location_dropdown.value,
+                    "priority": priority_dropdown.value or "Low",
+                    "is_anonymous": bool(anonymous_checkbox.value),
+                    "is_hostel": bool(hostel_checkbox.value),
+                    "location_custom": custom_loc_field.value if location_dropdown.value == "OTHER" else None,
+                    "category_custom": custom_cat_field.value or "",
+                    "temp_files": _get_selected_files(self.page),
+                }
+                save_complaint_draft(self.page, d, owner_id=self.student_id)
+            except Exception:
+                pass
+
         def on_desc_change(e):
             n = len(desc_field.value or "")
             char_counter.value = f"{n} / 1000 characters (min 10)"
             char_counter.color = "#dc2626" if (n < 10 or n > 1000) else "#059669"
+            save_draft_state()
             self.page.update()
 
         desc_field.on_change = on_desc_change
+        title_field.on_change = lambda e: save_draft_state()
 
         cat_options = [ft.dropdown.Option(key=str(c["id"]), text=str(c["name"])) for c in self.categories]
 
         custom_cat_field = ft.TextField(
             label="Specify Custom Category / Subcategory (Compulsory)",
             hint_text="Please describe your specific issue in detail...",
+            value=init_cat_custom,
             dense=True,
-            visible=False,
+            visible=bool(init_cat_custom),
             expand=True
         )
+        custom_cat_field.on_change = lambda e: save_draft_state()
 
         priority_dropdown = ft.Dropdown(
             label="Priority",
@@ -320,10 +378,11 @@ class StudentView:
                 ft.dropdown.Option("Medium"),
                 ft.dropdown.Option("High")
             ],
-            value="Low",
+            value=init_pri,
             dense=True,
             width=160
         )
+        priority_dropdown.on_change = lambda e: save_draft_state()
 
         def on_subcat_change(e):
             selected_sub_key = getattr(e, "data", None) or getattr(e.control, "value", None) or getattr(self.subcategory_dropdown, "value", None)
@@ -368,22 +427,9 @@ class StudentView:
                 self.page.update()
             except Exception:
                 pass
+            save_draft_state()
 
-        self.subcategory_dropdown = subcategory_dropdown = ft.Dropdown(
-            label="Subcategory (Select Category First)",
-            options=[],
-            dense=True,
-            expand=True,
-            on_select=on_subcat_change
-        )
-        self.subcategory_dropdown.on_select = on_subcat_change
-        self.subcategory_dropdown.on_change = on_subcat_change
-        self.subcat_holder = subcat_holder = ft.Container(content=subcategory_dropdown, col={"xs": 12, "sm": 6})
-
-        def on_cat_change(e):
-            raw_cat = getattr(e, "data", None) or getattr(e.control, "value", None) or (self.category_dropdown.value if hasattr(self, "category_dropdown") else None)
-            if hasattr(self, "category_dropdown") and self.category_dropdown:
-                self.category_dropdown.value = raw_cat
+        def _build_subcategory_dropdown(raw_cat, preselected_sub=None):
             cat_id = raw_cat
             cat_name = ""
             for c in self.categories:
@@ -414,19 +460,50 @@ class StudentView:
                     opts.append(ft.dropdown.Option(key=sid, text=sname))
 
             lbl = f"Subcategory ({len(opts)} available)" if opts else "Subcategory"
-            print(f"[CATEGORY_CHANGE] raw_cat={raw_cat}, resolved_id={cat_id}, resolved_name='{cat_name}', options_count={len(opts)}")
+
+            sub_val = None
+            if preselected_sub:
+                for opt in opts:
+                    if str(opt.key) == str(preselected_sub) or str(opt.text) == str(preselected_sub):
+                        sub_val = str(opt.key)
+                        break
 
             new_subcat = ft.Dropdown(
                 label=lbl,
                 options=opts,
-                value=None,
+                value=sub_val,
                 dense=True,
                 expand=True,
                 on_select=on_subcat_change
             )
             new_subcat.on_select = on_subcat_change
             new_subcat.on_change = on_subcat_change
+            return new_subcat, cat_name
 
+        if init_cat:
+            init_subcat_ctrl, init_cat_name = _build_subcategory_dropdown(init_cat, init_sub)
+            self.subcategory_dropdown = init_subcat_ctrl
+            if (init_cat_name.strip().lower() == "other") or (init_sub == "OTHER"):
+                custom_cat_field.visible = True
+        else:
+            self.subcategory_dropdown = ft.Dropdown(
+                label="Subcategory (Select Category First)",
+                options=[],
+                dense=True,
+                expand=True,
+                on_select=on_subcat_change
+            )
+            self.subcategory_dropdown.on_select = on_subcat_change
+            self.subcategory_dropdown.on_change = on_subcat_change
+
+        self.subcat_holder = subcat_holder = ft.Container(content=self.subcategory_dropdown, col={"xs": 12, "sm": 6})
+
+        def on_cat_change(e):
+            raw_cat = getattr(e, "data", None) or getattr(e.control, "value", None) or (self.category_dropdown.value if hasattr(self, "category_dropdown") else None)
+            if hasattr(self, "category_dropdown") and self.category_dropdown:
+                self.category_dropdown.value = raw_cat
+
+            new_subcat, cat_name = _build_subcategory_dropdown(raw_cat)
             self.subcategory_dropdown = new_subcat
             self.subcat_holder.content = new_subcat
 
@@ -456,10 +533,12 @@ class StudentView:
                 self.page.update()
             except Exception as ex:
                 print(f"[CATEGORY_CHANGE] page.update warning: {ex}")
+            save_draft_state()
 
         self.category_dropdown = category_dropdown = ft.Dropdown(
             label="Category",
             options=cat_options,
+            value=init_cat,
             dense=True,
             expand=True,
             on_select=on_cat_change
@@ -469,27 +548,31 @@ class StudentView:
 
         loc_options = [ft.dropdown.Option(l["id"], l["name"]) for l in self.locations]
         loc_options.append(ft.dropdown.Option("OTHER", "Other / Custom Location"))
-        location_dropdown = ft.Dropdown(label="Location", options=loc_options, dense=True, expand=True)
-        custom_loc_field = ft.TextField(label="Specify Custom Location", dense=True, visible=False, expand=True)
+        location_dropdown = ft.Dropdown(label="Location", options=loc_options, value=init_loc, dense=True, expand=True)
+        custom_loc_field = ft.TextField(label="Specify Custom Location", dense=True, value=init_loc_custom, visible=(init_loc == "OTHER"), expand=True)
 
         def on_loc_change(e):
             custom_loc_field.visible = (location_dropdown.value == "OTHER")
+            save_draft_state()
             self.page.update()
 
         location_dropdown.on_select = on_loc_change
         location_dropdown.on_change = on_loc_change
+        custom_loc_field.on_change = lambda e: save_draft_state()
 
         anonymous_checkbox = ft.Checkbox(
             label="Submit Anonymously (Identity strictly hidden from all staff & administration)",
-            value=False
+            value=init_anon
         )
+        anonymous_checkbox.on_change = lambda e: save_draft_state()
 
         is_approved_hostel = self.student.get("is_hostel_approved", False)
         hostel_checkbox = ft.Checkbox(
             label="Hostel-related Complaint",
-            value=False,
+            value=init_hostel if is_approved_hostel else False,
             disabled=not is_approved_hostel
         )
+        hostel_checkbox.on_change = lambda e: save_draft_state()
         hostel_note = ft.Text(
             "Hostel complaints require Hostel Incharge residency approval." if not is_approved_hostel else "Enabled (Approved hostel resident).",
             size=11,
@@ -623,6 +706,7 @@ class StudentView:
                     self.page.update()
                 except Exception:
                     pass
+            save_draft_state()
 
 # Populate pre-existing attachments if any
         if _get_selected_files(self.page):
@@ -749,6 +833,7 @@ class StudentView:
                             logger.error("Error uploading attachment to Supabase: %s", up_err)
 
                     _set_selected_files(self.page, [])
+                    clear_complaint_draft(self.page)
                     show_feedback_message(self.page, f"Complaint #{cid} registered successfully!", is_error=False)
                     self.cached_complaints = None
                     self._switch_view(2)  # Switch to My Complaints

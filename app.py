@@ -3,9 +3,12 @@ app.py: Application entry point for Digital Complaint Box System.
 Initializes Flet application, theme, responsive layouts, dark mode switching, and view routers.
 """
 
+import logging
 import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
+
+logger = logging.getLogger("complaint_box.app")
 
 # Ensure root directory is on Python path
 ROOT_DIR = Path(__file__).resolve().parent
@@ -26,6 +29,14 @@ from ui.views.staff_view import StaffView
 from ui.components.navbar import create_app_bar, create_navigation_rail
 from database.supabase_client import check_schema_health
 from models.user import UserRole
+from services.draft_recovery_service import (
+    get_shared_preferences,
+    save_auth_session,
+    clear_auth_session,
+    save_active_tab,
+    restore_active_tab_async,
+    restore_complaint_draft_async,
+)
 
 
 def main(page: ft.Page):
@@ -45,6 +56,7 @@ def main(page: ft.Page):
 
     from ui.components.page_file_services import ensure_complaint_attachment_state
     ensure_complaint_attachment_state(page)
+    get_shared_preferences(page)
 
     # Fast non-blocking schema status (database is verified in production)
     schema_status = {"connected": True, "tables_ready": True}
@@ -54,23 +66,37 @@ def main(page: ft.Page):
     current_portal_content = [None]
 
     def on_logout():
-        try:
-            if hasattr(page, "session") and page.session and hasattr(page.session, "store") and page.session.store:
-                page.session.store.clear()
-        except Exception:
-            pass
+        clear_auth_session(page)
         AppState.clear_user()
         page.appbar = None
         render_auth_view()
 
     def on_authenticated(user_data: Dict[str, Any], role: str):
-        try:
-            if hasattr(page, "session") and page.session and hasattr(page.session, "store") and page.session.store:
-                page.session.store.set("current_user", user_data)
-                page.session.store.set("role", role)
-        except Exception:
-            pass
+        save_auth_session(page, user_data, role)
         AppState.set_user(user_data, role)
+
+        if role == UserRole.STUDENT.value and hasattr(page, "run_task"):
+            async def _resume_student_portal():
+                tab = 0
+                try:
+                    sid = str(user_data.get("id") or "")
+                    restored_tab = await restore_active_tab_async(page, expected_owner_id=sid)
+                    draft = await restore_complaint_draft_async(page, expected_owner_id=sid)
+                    if restored_tab is not None:
+                        tab = restored_tab
+                    elif draft and (draft.get("title") or draft.get("description") or draft.get("temp_files")):
+                        tab = 1
+                except Exception as ex:
+                    logger.warning("Error recovering student draft or active tab: %s", type(ex).__name__)
+                    tab = 0
+                render_portal_view(initial_tab=tab)
+
+            try:
+                page.run_task(_resume_student_portal)
+                return
+            except Exception as launch_ex:
+                logger.warning("Failed to launch student portal recovery task: %s", type(launch_ex).__name__)
+
         render_portal_view()
 
     def render_auth_view():
@@ -130,7 +156,7 @@ def main(page: ft.Page):
         w = page.width or 1000
         return w < 768
 
-    def render_portal_view():
+    def render_portal_view(initial_tab: Optional[int] = None):
         user = AppState.current_user
         role = AppState.role
 
@@ -159,12 +185,14 @@ def main(page: ft.Page):
         )
 
         # Restore active tab index from session store so mobile reconnects keep form in view
-        active_tab = 0
-        try:
-            if hasattr(page, "session") and page.session and hasattr(page.session, "store") and page.session.store:
-                active_tab = page.session.store.get("active_tab_index", 0)
-        except Exception:
-            pass
+        active_tab = initial_tab
+        if active_tab is None:
+            active_tab = 0
+            try:
+                if hasattr(page, "session") and page.session and hasattr(page.session, "store") and page.session.store:
+                    active_tab = page.session.store.get("active_tab_index", 0)
+            except Exception:
+                pass
 
         # Active View Component
         if role == UserRole.STUDENT.value:
@@ -177,11 +205,8 @@ def main(page: ft.Page):
             current_active_view[0] = staff_view
 
         def on_nav_change(index: int):
-            try:
-                if hasattr(page, "session") and page.session and hasattr(page.session, "store") and page.session.store:
-                    page.session.store.set("active_tab_index", index)
-            except Exception:
-                pass
+            user_id = AppState.current_user.get("id") if AppState.current_user else None
+            save_active_tab(page, index, owner_id=user_id)
             if current_active_view[0]:
                 current_active_view[0]._switch_view(index)
 
