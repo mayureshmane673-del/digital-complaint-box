@@ -359,24 +359,68 @@ def _store_remove(store: Any, key: str) -> None:
 
 
 # -----------------------------------------------------------------------------
-# AUTHENTICATION SESSION RECOVERY (IN-MEMORY ONLY)
+# AUTHENTICATION SESSION RECOVERY (SECURE WITH BACKEND VALIDATION)
 # -----------------------------------------------------------------------------
-async def save_auth_session_async(page: ft.Page, user: Dict[str, Any], role: str) -> None:
-    """Stores validated auth session strictly in server-side session store."""
-    save_auth_session(page, user, role)
+async def _purge_persistent_auth(page: ft.Page, sp: Optional[Any] = None) -> None:
+    """Safely clears persistent auth keys from SharedPreferences and in-memory store."""
+    store = _get_session_store(page)
+    if store is not None:
+        _store_remove(store, SESSION_KEY_USER)
+        _store_remove(store, SESSION_KEY_ROLE)
+
+    if sp is None:
+        sp = get_shared_preferences(page)
+    if sp and hasattr(page, "session") and getattr(page.session, "id", None):
+        try:
+            await sp.remove(SP_KEY_USER)
+            await sp.remove(SP_KEY_ROLE)
+        except Exception:
+            pass
+
+
+async def save_auth_session_async(page: ft.Page, user: Dict[str, Any], role: str) -> bool:
+    """Stores validated auth session in server session store and persistent SharedPreferences.
+
+    Returns True if persistent storage write succeeded, False otherwise.
+    """
+    safe_user = sanitize_profile_for_storage(user)
+    if not safe_user or not role:
+        return False
+    clean_role = str(role).strip()
+
+    store = _get_session_store(page)
+    if store is not None:
+        _store_set(store, SESSION_KEY_USER, safe_user)
+        _store_set(store, SESSION_KEY_ROLE, clean_role)
+
+    sp = get_shared_preferences(page)
+    if not sp or not hasattr(page, "session") or not getattr(page.session, "id", None):
+        return False
+
+    try:
+        await sp.set(SP_KEY_USER, json.dumps(safe_user))
+        await sp.set(SP_KEY_ROLE, clean_role)
+        return True
+    except Exception as ex:
+        logger.warning("save_auth_session_async: persistent storage write error: %s", type(ex).__name__)
+        return False
 
 
 def save_auth_session(page: ft.Page, user: Dict[str, Any], role: str) -> None:
-    """Stores validated auth session strictly in server-side session store (not in localStorage)."""
-    store = _get_session_store(page)
+    """Stores validated auth session strictly in server-side in-memory session store."""
     safe_user = sanitize_profile_for_storage(user)
-    if store is not None and safe_user:
+    if not safe_user or not role:
+        return
+    clean_role = str(role).strip()
+
+    store = _get_session_store(page)
+    if store is not None:
         _store_set(store, SESSION_KEY_USER, safe_user)
-        _store_set(store, SESSION_KEY_ROLE, role)
+        _store_set(store, SESSION_KEY_ROLE, clean_role)
 
 
 async def clear_auth_session_async(page: ft.Page) -> None:
-    """Clears in-memory session store and wipes persistent draft and legacy keys on logout."""
+    """Clears in-memory session store and wipes persistent auth, draft, and tab keys on logout."""
     store = _get_session_store(page)
     if store is not None:
         _store_remove(store, SESSION_KEY_USER)
@@ -414,18 +458,135 @@ def clear_auth_session(page: ft.Page) -> None:
 
 async def restore_auth_session_async(page: ft.Page) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
-    SECURITY NOTE:
-    Browser localStorage is client-controlled and untrusted.
-    It MUST NOT be used to authenticate a user or determine their role.
-    Only the server-side in-memory session store (populated by successful backend
-    authentication via AuthService) may provide an active session.
+    Restores authenticated user session across page reloads.
+
+    SECURITY ARCHITECTURE:
+    1. Browser localStorage / SharedPreferences is completely untrusted and client-controlled.
+       It is NEVER treated as proof of authentication on its own.
+    2. Any profile found in storage MUST be strictly validated against the trusted backend
+       database (students or staff_users table) before being accepted.
+    3. The account must exist, must be active (is_active is not False), and must not be locked
+       (is_locked is not True).
+    4. Passwords, hashes, tokens, and secrets are NEVER read, written, or restored.
+    5. If backend validation fails, persistent auth keys are immediately purged.
     """
+    # 1. Fast path: check server-side in-memory session store for active connection
     store = _get_session_store(page)
     if store is not None:
         u = _store_get(store, SESSION_KEY_USER)
         r = _store_get(store, SESSION_KEY_ROLE)
-        if u and r:
-            return u, r
+        if u and r and isinstance(u, dict):
+            return u, str(r)
+
+    # 2. Check persistent SharedPreferences (browser localStorage)
+    sp = get_shared_preferences(page)
+    if not sp or not hasattr(page, "session") or not getattr(page.session, "id", None):
+        return None, None
+
+    raw_user = None
+    raw_role = None
+    try:
+        raw_user = await asyncio.wait_for(sp.get(SP_KEY_USER), timeout=2.0)
+        raw_role = await asyncio.wait_for(sp.get(SP_KEY_ROLE), timeout=2.0)
+    except Exception as ex:
+        logger.debug("restore_auth_session_async: storage read error: %s", type(ex).__name__)
+        return None, None
+
+    if not raw_user or not raw_role:
+        return None, None
+
+    try:
+        stored_profile = json.loads(raw_user) if isinstance(raw_user, str) else raw_user
+    except Exception:
+        await _purge_persistent_auth(page, sp)
+        return None, None
+
+    if not isinstance(stored_profile, dict):
+        await _purge_persistent_auth(page, sp)
+        return None, None
+
+    stored_id = str(stored_profile.get("id") or "").strip()
+    stored_role = str(raw_role).strip()
+    if not stored_id or not stored_role:
+        await _purge_persistent_auth(page, sp)
+        return None, None
+
+    # 3. BACKEND VALIDATION: Validate against database via trusted backend client
+    try:
+        from database.supabase_client import get_trusted_backend_client
+        client = get_trusted_backend_client()
+    except Exception as init_ex:
+        logger.warning("restore_auth_session_async: database client error: %s", type(init_ex).__name__)
+        return None, None
+
+    validated_user: Optional[Dict[str, Any]] = None
+    validated_role: Optional[str] = None
+
+    try:
+        if stored_role.lower() == "student":
+            clean_roll = str(stored_profile.get("roll_number") or "").strip().upper()
+            if not clean_roll:
+                await _purge_persistent_auth(page, sp)
+                return None, None
+
+            def _fetch_student():
+                return client.table("students").select("*").eq("id", stored_id).eq("roll_number", clean_roll).limit(1).execute()
+
+            res = await asyncio.to_thread(_fetch_student)
+            if not res or not res.data or len(res.data) == 0:
+                logger.info("[SECURITY] Persistent student auth rejected: record not found in backend")
+                await _purge_persistent_auth(page, sp)
+                return None, None
+
+            db_student = res.data[0]
+            if db_student.get("is_active") is False or db_student.get("is_locked"):
+                logger.info("[SECURITY] Persistent student auth rejected: account locked or deactivated")
+                await _purge_persistent_auth(page, sp)
+                return None, None
+
+            try:
+                from services.cache_service import CacheService
+                dept = CacheService.get_department_by_id(db_student.get("department_id"))
+                if dept:
+                    db_student["departments"] = {"code": dept.get("code"), "name": dept.get("name")}
+            except Exception:
+                pass
+
+            validated_user = sanitize_profile_for_storage(db_student)
+            validated_role = "Student"
+
+        else:
+            def _fetch_staff():
+                return client.table("staff_users").select(
+                    "id, username, full_name, role, department_id, is_locked, is_active, created_at, updated_at, departments(code, name)"
+                ).eq("id", stored_id).eq("role", stored_role).limit(1).execute()
+
+            res = await asyncio.to_thread(_fetch_staff)
+            if not res or not res.data or len(res.data) == 0:
+                logger.info("[SECURITY] Persistent staff auth rejected: record not found in backend")
+                await _purge_persistent_auth(page, sp)
+                return None, None
+
+            db_staff = res.data[0]
+            if db_staff.get("is_active") is False or db_staff.get("is_locked"):
+                logger.info("[SECURITY] Persistent staff auth rejected: account locked or deactivated")
+                await _purge_persistent_auth(page, sp)
+                return None, None
+
+            validated_user = sanitize_profile_for_storage(db_staff)
+            validated_role = db_staff.get("role") or stored_role
+
+    except Exception as db_ex:
+        logger.warning("restore_auth_session_async: backend validation exception: %s", type(db_ex).__name__)
+        return None, None
+
+    if validated_user and validated_role:
+        if store is not None:
+            _store_set(store, SESSION_KEY_USER, validated_user)
+            _store_set(store, SESSION_KEY_ROLE, validated_role)
+        return validated_user, validated_role
+
+    await _purge_persistent_auth(page, sp)
     return None, None
 
 

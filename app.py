@@ -32,10 +32,12 @@ from models.user import UserRole
 from services.draft_recovery_service import (
     get_shared_preferences,
     save_auth_session,
+    save_auth_session_async,
     clear_auth_session,
     save_active_tab,
     restore_active_tab_async,
     restore_complaint_draft_async,
+    restore_auth_session_async,
 )
 
 
@@ -72,30 +74,47 @@ def main(page: ft.Page):
         render_auth_view()
 
     def on_authenticated(user_data: Dict[str, Any], role: str):
+        # 1. Update in-memory session and app state immediately (synchronous fast path)
         save_auth_session(page, user_data, role)
         AppState.set_user(user_data, role)
 
-        if role == UserRole.STUDENT.value and hasattr(page, "run_task"):
-            async def _resume_student_portal():
-                tab = 0
+        # 2. Await persistent SharedPreferences write BEFORE rendering authenticated portal
+        if hasattr(page, "run_task"):
+            async def _persist_and_render_portal():
+                persisted = False
                 try:
-                    sid = str(user_data.get("id") or "")
-                    restored_tab = await restore_active_tab_async(page, expected_owner_id=sid)
-                    draft = await restore_complaint_draft_async(page, expected_owner_id=sid)
-                    if restored_tab is not None:
-                        tab = restored_tab
-                    elif draft and (draft.get("title") or draft.get("description") or draft.get("temp_files")):
-                        tab = 1
-                except Exception as ex:
-                    logger.warning("Error recovering student draft or active tab: %s", type(ex).__name__)
-                    tab = 0
+                    persisted = await save_auth_session_async(page, user_data, role)
+                except Exception as save_ex:
+                    logger.warning("save_auth_session_async failed during login: %s", type(save_ex).__name__)
+                    persisted = False
+
+                setattr(page, "_dcb_auth_persisted", persisted)
+                if not persisted:
+                    logger.warning("[AUTH] Persistent storage write failed/unavailable for user %s; session remains in-memory", user_data.get("id"))
+                else:
+                    logger.debug("[AUTH] Persistent auth save confirmed for user %s", user_data.get("id"))
+
+                tab = 0
+                if role == UserRole.STUDENT.value:
+                    try:
+                        sid = str(user_data.get("id") or "")
+                        restored_tab = await restore_active_tab_async(page, expected_owner_id=sid)
+                        draft = await restore_complaint_draft_async(page, expected_owner_id=sid)
+                        if restored_tab is not None:
+                            tab = restored_tab
+                        elif draft and (draft.get("title") or draft.get("description") or draft.get("temp_files")):
+                            tab = 1
+                    except Exception as ex:
+                        logger.warning("Error recovering student draft or active tab: %s", type(ex).__name__)
+                        tab = 0
+
                 render_portal_view(initial_tab=tab)
 
             try:
-                page.run_task(_resume_student_portal)
+                page.run_task(_persist_and_render_portal)
                 return
             except Exception as launch_ex:
-                logger.warning("Failed to launch student portal recovery task: %s", type(launch_ex).__name__)
+                logger.warning("Failed to launch persist_and_render_portal task: %s", type(launch_ex).__name__)
 
         render_portal_view()
 
@@ -263,7 +282,7 @@ def main(page: ft.Page):
 
     page.on_resized = on_page_resize
 
-    # Initial start: Check if this session is already authenticated (e.g. mobile tab switch/reconnection)
+    # Initial start: Check if this session is already authenticated (fast-path in-memory store)
     restored_user = None
     restored_role = None
     try:
@@ -276,10 +295,54 @@ def main(page: ft.Page):
     if restored_user and restored_role:
         AppState.set_user(restored_user, restored_role)
         render_portal_view()
-    elif AppState.is_authenticated():
-        render_portal_view()
-    else:
-        render_auth_view()
+        return
+
+    # If this is a new Flet session (e.g. mobile reload, socket reconnect drop, new tab),
+    # perform deterministic async persistent authentication restoration.
+    restoration_in_progress = [False]
+
+    async def _try_restore_session():
+        if restoration_in_progress[0]:
+            return
+        restoration_in_progress[0] = True
+        try:
+            r_user, r_role = await restore_auth_session_async(page)
+            if r_user and r_role:
+                AppState.set_user(r_user, r_role)
+                tab = 0
+                if str(r_role).lower() == "student":
+                    sid = str(r_user.get("id") or "")
+                    try:
+                        restored_tab = await restore_active_tab_async(page, expected_owner_id=sid)
+                        draft = await restore_complaint_draft_async(page, expected_owner_id=sid)
+                        if restored_tab is not None:
+                            tab = restored_tab
+                        elif draft and (draft.get("title") or draft.get("description") or draft.get("temp_files")):
+                            tab = 1
+                    except Exception as rec_ex:
+                        logger.warning("Error recovering student draft or active tab during restore: %s", type(rec_ex).__name__)
+                        tab = 0
+                render_portal_view(initial_tab=tab)
+            else:
+                render_auth_view()
+        except Exception as ex:
+            logger.warning("Session restoration failed: %s", type(ex).__name__)
+            render_auth_view()
+        finally:
+            restoration_in_progress[0] = False
+
+    if hasattr(page, "run_task"):
+        try:
+            # Set background color immediately to match theme and prevent jarring white flashes
+            is_dark = AppState.is_dark_mode
+            colors = get_theme_colors(is_dark)
+            page.bgcolor = colors["bg"]
+            page.run_task(_try_restore_session)
+            return
+        except Exception as launch_ex:
+            logger.warning("Failed to launch session restoration task: %s", type(launch_ex).__name__)
+
+    render_auth_view()
 
 
 # Ensure uploads directory structure exists for direct HTTP PUT streaming
