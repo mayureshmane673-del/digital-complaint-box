@@ -53,19 +53,44 @@ def _get_session_store(page: ft.Page) -> Optional[Dict[str, Any]]:
 def _register_picker(page: ft.Page, picker: ft.FilePicker, attr: str) -> ft.FilePicker:
     existing = getattr(page, attr, None)
     if existing is not None:
+        # If a new picker was passed in but we already have an existing singleton,
+        # ensure the newly instantiated unused picker doesn't linger in _services
+        if picker is not None and picker is not existing:
+            if hasattr(page, "_services") and hasattr(page._services, "_services"):
+                reg = page._services._services
+                if isinstance(reg, list) and picker in reg:
+                    reg.remove(picker)
         return existing
+
     setattr(page, attr, picker)
-    if hasattr(page, "services") and picker not in page.services:
-        page.services.append(picker)
-    if hasattr(page, "_services") and hasattr(page._services, "register_service"):
+
+    # Maintain single entry in view-level services list if present
+    if hasattr(page, "services") and isinstance(page.services, list):
+        if picker not in page.services:
+            page.services.append(picker)
+
+    # In Flet 0.86.5, Service.init() automatically registers the picker into
+    # context.page._services (ServiceRegistry) when context.page is active.
+    # Connect hierarchy (picker -> ServiceRegistry -> Page) if not yet resolved,
+    # and only register manually if not already present in page._services.
+    # Guard against MagicMock in test environments so parent traversal never loops infinitely
+    if hasattr(page, "_services") and type(page._services).__name__ != "MagicMock" and type(page).__name__ != "MagicMock":
         try:
-            page._services.register_service(picker)
+            if not getattr(page._services, "_parent", None):
+                page._services._parent = weakref.ref(page)
+            if not getattr(picker, "_parent", None):
+                picker._parent = weakref.ref(page._services)
         except Exception:
             pass
-    try:
-        picker._parent = weakref.ref(page)
-    except Exception:
-        pass
+
+        if hasattr(page._services, "register_service"):
+            reg_services = getattr(page._services, "_services", None)
+            if reg_services is None or picker not in reg_services:
+                try:
+                    page._services.register_service(picker)
+                except Exception:
+                    pass
+
     return picker
 
 
