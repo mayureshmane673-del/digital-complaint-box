@@ -609,8 +609,7 @@ def open_complaint_attachment_picker(page: ft.Page) -> None:
         try:
             logger.info("[ATTACHMENT] DEBUG: _launch starting pick_files invocation=%s", invocation_id)
             files = await picker.pick_files(
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=ATTACHMENT_EXTENSIONS,
+                file_type=ft.FilePickerFileType.ANY,
                 allow_multiple=False,
                 with_data=False,
                 cancel_upload_on_window_blur=False,

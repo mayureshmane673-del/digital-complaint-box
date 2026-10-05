@@ -22,7 +22,10 @@ from ui.components.page_file_services import (
     get_complaint_file_picker,
     ensure_import_picker,
     _register_picker,
+    open_complaint_attachment_picker,
+    open_spreadsheet_import_picker,
 )
+from utils.validators import validate_attachment
 
 
 def _create_test_page():
@@ -158,3 +161,100 @@ def test_get_shared_preferences_mock_page_compatibility():
     mock_page = MagicMock()
     mock_page.services = None
     assert get_shared_preferences(mock_page) is None
+
+
+@pytest.mark.anyio
+async def test_complaint_picker_uses_file_type_any_and_without_data():
+    """Complaint attachment picker must use FileType.ANY and with_data=False (avoiding Android Gallery crash)."""
+    page = _create_test_page()
+    picker = get_complaint_file_picker(page)
+
+    # Mock pick_files on the complaint picker
+    picker.pick_files = AsyncMock(return_value=[])
+
+    open_complaint_attachment_picker(page)
+    # Allow scheduled _launch task to execute
+    await asyncio.sleep(0.01)
+
+    picker.pick_files.assert_called_once()
+    kwargs = picker.pick_files.call_args.kwargs
+    assert kwargs.get("file_type") == ft.FilePickerFileType.ANY
+    assert kwargs.get("with_data") is False
+    assert kwargs.get("allow_multiple") is False
+    assert kwargs.get("cancel_upload_on_window_blur") is False
+    # allowed_extensions should NOT be passed for FileType.ANY (Flet web raises exception if present)
+    assert "allowed_extensions" not in kwargs or kwargs["allowed_extensions"] is None
+
+
+@pytest.mark.anyio
+async def test_spreadsheet_import_picker_retains_custom_extensions():
+    """Coordinator import picker must preserve FileType.CUSTOM and explicit spreadsheet extensions."""
+    page = _create_test_page()
+    picker = ensure_import_picker(page)
+
+    picker.pick_files = AsyncMock(return_value=[])
+
+    on_selected = MagicMock()
+    on_busy = MagicMock()
+    open_spreadsheet_import_picker(page, on_selected=on_selected, on_busy=on_busy)
+    await asyncio.sleep(0.01)
+
+    picker.pick_files.assert_called_once()
+    kwargs = picker.pick_files.call_args.kwargs
+    assert kwargs.get("file_type") == ft.FilePickerFileType.CUSTOM
+    assert kwargs.get("allowed_extensions") == ["xlsx", "xls", "csv"]
+    assert kwargs.get("with_data") is False
+    assert kwargs.get("allow_multiple") is False
+
+
+def test_attachment_validation_rejects_unsupported_extensions():
+    """validate_attachment must strictly reject disallowed extensions (executables, scripts, archives)."""
+    disallowed = [
+        "virus.exe", "script.bat", "run.sh", "server.php",
+        "code.js", "app.py", "archive.zip", "data.tar.gz",
+        "doc.docx", "presentation.pptx", "unknown.bin", "no_ext"
+    ]
+    for filename in disallowed:
+        valid, err = validate_attachment(filename, 1024)
+        assert not valid, f"Expected {filename} to be rejected"
+        assert "not allowed" in err.lower() or "supported formats" in err.lower()
+
+    allowed = [
+        "photo.jpg", "photo.jpeg", "screenshot.png", "image.webp",
+        "video.mp4", "clip.mov", "document.pdf",
+        "UPPERCASE.JPG", "MixedCase.PnG", "DOCUMENT.PDF"
+    ]
+    for filename in allowed:
+        valid, err = validate_attachment(filename, 1024)
+        assert valid, f"Expected {filename} to be accepted, got error: {err}"
+        assert err == ""
+
+
+def test_attachment_validation_rejects_oversized_and_empty_files():
+    """validate_attachment must reject empty files and files exceeding 10 MB."""
+    # 0 bytes or negative
+    valid, err = validate_attachment("test.jpg", 0)
+    assert not valid
+    assert "empty" in err.lower()
+
+    valid, err = validate_attachment("test.png", -5)
+    assert not valid
+    assert "empty" in err.lower()
+
+    # Exceeding 10 MB
+    valid, err = validate_attachment("test.pdf", 10 * 1024 * 1024 + 1)
+    assert not valid
+    assert "exceeds 10 mb" in err.lower()
+
+    valid, err = validate_attachment("test.mp4", 15 * 1024 * 1024)
+    assert not valid
+    assert "exceeds 10 mb" in err.lower()
+
+    # Exactly 10 MB and valid smaller sizes
+    valid, err = validate_attachment("test.pdf", 10 * 1024 * 1024)
+    assert valid
+    assert err == ""
+
+    valid, err = validate_attachment("test.jpg", 50 * 1024)
+    assert valid
+    assert err == ""
