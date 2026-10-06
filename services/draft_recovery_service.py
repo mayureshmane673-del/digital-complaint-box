@@ -486,10 +486,10 @@ async def restore_auth_session_async(page: ft.Page) -> Tuple[Optional[Dict[str, 
     raw_user = None
     raw_role = None
     try:
-        raw_user = await asyncio.wait_for(sp.get(SP_KEY_USER), timeout=2.0)
-        raw_role = await asyncio.wait_for(sp.get(SP_KEY_ROLE), timeout=2.0)
+        raw_user = await asyncio.wait_for(sp.get(SP_KEY_USER), timeout=4.0)
+        raw_role = await asyncio.wait_for(sp.get(SP_KEY_ROLE), timeout=4.0)
     except Exception as ex:
-        logger.debug("restore_auth_session_async: storage read error: %s", type(ex).__name__)
+        logger.info("[AUTH RESTORE] Storage read error or timeout: %s: %s", type(ex).__name__, ex)
         return None, None
 
     if not raw_user or not raw_role:

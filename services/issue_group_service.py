@@ -81,6 +81,9 @@ class IssueGroupService:
             "details": f"Complaint #{duplicate_complaint_id} linked to group (Total duplicates: +{dup_count})."
         }).execute()
 
+        from services.cache_service import CacheService
+        CacheService.invalidate_issue_groups()
+
         return True, f"Complaint #{duplicate_complaint_id} successfully linked to Issue Group.", group_id
 
     @classmethod
@@ -118,6 +121,9 @@ class IssueGroupService:
             "actor_role": actor_role,
             "details": f"Complaint #{complaint_id} unlinked from group."
         }).execute()
+
+        from services.cache_service import CacheService
+        CacheService.invalidate_issue_groups()
 
         return True, f"Complaint #{complaint_id} unlinked from group."
 
@@ -172,6 +178,12 @@ class IssueGroupService:
         if role == UserRole.STUDENT.value:
             return []
 
+        from services.cache_service import CacheService
+        cached = CacheService.get_cached_issue_groups(department_id, role, is_hostel)
+        if cached is not None:
+            return cached
+
+        from collections import defaultdict
         client = get_trusted_backend_client()
 
         try:
@@ -200,54 +212,58 @@ class IssueGroupService:
 
         groups = res.data or []
         if not groups:
+            CacheService.set_cached_issue_groups(department_id, role, is_hostel, [], ttl_seconds=30)
             return []
 
+        # Batch-fetch all members for all groups in a single query
+        group_ids = [g["id"] for g in groups]
+        members_by_group = defaultdict(list)
+        library_groups = set()
+
+        try:
+            m_res = client.table("issue_group_members").select(
+                "id, issue_group_id, complaint_id, complaints(complaint_id, title, description, status, priority, is_anonymous, created_at, category_id, categories(name))"
+            ).in_("issue_group_id", group_ids).execute()
+
+            for m in (m_res.data or []):
+                gid = m.get("issue_group_id")
+                comp = m.get("complaints")
+                if comp:
+                    c_dict = {
+                        "id": m.get("id"),
+                        "complaint_id": comp.get("complaint_id"),
+                        "title": comp.get("title"),
+                        "status": comp.get("status", "Pending"),
+                        "priority": comp.get("priority", "Low"),
+                        "is_anonymous": comp.get("is_anonymous", False),
+                        "created_at": comp.get("created_at")
+                    }
+                    cat_info = comp.get("categories")
+                    cat_name = cat_info.get("name", "") if isinstance(cat_info, dict) else ""
+                    if cat_name.lower() == "library":
+                        library_groups.add(gid)
+                    if comp.get("is_anonymous"):
+                        c_dict["student_info"] = "Anonymous Student"
+                    members_by_group[gid].append(c_dict)
+                else:
+                    members_by_group[gid].append({
+                        "id": m.get("id"),
+                        "complaint_id": m.get("complaint_id"),
+                        "status": "Pending",
+                        "priority": "Low"
+                    })
+        except Exception:
+            pass
+
         filtered_groups = []
-        # For each group, load its members and mask anonymous student info
         for g in groups:
             gid = g["id"]
             g["parent_complaint_id"] = g.get("primary_complaint_id")
             g["status"] = g.get("group_status", "Active")
-
-            try:
-                m_res = client.table("issue_group_members").select(
-                    "id, complaint_id, complaints(complaint_id, title, description, status, priority, is_anonymous, created_at, category_id, categories(name))"
-                ).eq("issue_group_id", gid).execute()
-
-                members = []
-                is_library_group = False
-                for m in (m_res.data or []):
-                    comp = m.get("complaints")
-                    if comp:
-                        c_dict = {
-                            "id": m.get("id"),
-                            "complaint_id": comp.get("complaint_id"),
-                            "title": comp.get("title"),
-                            "status": comp.get("status", "Pending"),
-                            "priority": comp.get("priority", "Low"),
-                            "is_anonymous": comp.get("is_anonymous", False),
-                            "created_at": comp.get("created_at")
-                        }
-                        cat_info = comp.get("categories")
-                        cat_name = cat_info.get("name", "") if isinstance(cat_info, dict) else ""
-                        if cat_name.lower() == "library":
-                            is_library_group = True
-                        if comp.get("is_anonymous"):
-                            c_dict["student_info"] = "Anonymous Student"
-                        members.append(c_dict)
-                    else:
-                        members.append({
-                            "id": m.get("id"),
-                            "complaint_id": m.get("complaint_id"),
-                            "status": "Pending",
-                            "priority": "Low"
-                        })
-                g["members"] = members
-            except Exception:
-                g["members"] = []
+            g["members"] = members_by_group.get(gid, [])
 
             # Role filtering for library
-            if role == UserRole.LIBRARY_INCHARGE.value and not is_library_group:
+            if role == UserRole.LIBRARY_INCHARGE.value and gid not in library_groups:
                 continue
 
             # Display title formatting: Original Title + (+N)
@@ -259,7 +275,7 @@ class IssueGroupService:
                 g["display_title"] = f"{base_t} (+{dup_cnt})"
             else:
                 g["display_title"] = base_t
-
             filtered_groups.append(g)
 
+        CacheService.set_cached_issue_groups(department_id, role, is_hostel, filtered_groups, ttl_seconds=30)
         return filtered_groups

@@ -67,21 +67,32 @@ def create_app_bar(
     if department_code and user_role in (UserRole.HOD.value, UserRole.COORDINATOR.value):
         role_badge_text = f"{user_role} ({department_code})"
 
+    is_compact = bool(isinstance(getattr(page, "width", None), (int, float)) and page.width < 768)
+
     return ft.AppBar(
-        leading=ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=ft.Colors.WHITE),
-        leading_width=40,
+        leading=ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=ft.Colors.WHITE, size=22),
+        leading_width=36 if is_compact else 40,
         title=ft.Row(
             controls=[
-                ft.Text("Digital Complaint Box", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                ft.Container(
-                    content=ft.Text(role_badge_text, size=11, weight=ft.FontWeight.W_600, color="#1e3a8a"),
-                    bgcolor="#dbeafe",
-                    border_radius=12,
-                    padding=ft.padding.symmetric(horizontal=10, vertical=3)
+                ft.Text(
+                    "Complaint Box" if is_compact else "Digital Complaint Box",
+                    size=15 if is_compact else 17,
+                    weight=ft.FontWeight.BOLD,
+                    color=ft.Colors.WHITE
+                ),
+                *(
+                    [
+                        ft.Container(
+                            content=ft.Text(role_badge_text, size=11, weight=ft.FontWeight.W_600, color="#1e3a8a"),
+                            bgcolor="#dbeafe",
+                            border_radius=12,
+                            padding=ft.padding.symmetric(horizontal=8, vertical=2)
+                        )
+                    ] if not is_compact else []
                 )
             ],
-            spacing=10,
-            wrap=True
+            spacing=6 if is_compact else 8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER
         ),
         bgcolor=COLOR_PRIMARY,
         actions=[
@@ -89,6 +100,7 @@ def create_app_bar(
             ft.IconButton(
                 icon=ft.Icons.LIGHT_MODE if is_dark else ft.Icons.DARK_MODE,
                 icon_color=ft.Colors.WHITE,
+                icon_size=18 if is_compact else 20,
                 tooltip="Switch to Light Mode" if is_dark else "Switch to Dark Mode",
                 on_click=lambda _: AppState.toggle_dark_mode()
             ),
@@ -98,6 +110,7 @@ def create_app_bar(
                     ft.IconButton(
                         icon=ft.Icons.NOTIFICATIONS_OUTLINED,
                         icon_color=ft.Colors.WHITE,
+                        icon_size=18 if is_compact else 20,
                         tooltip="Notification Center",
                         on_click=open_notifications
                     ),
@@ -107,21 +120,27 @@ def create_app_bar(
             ft.Row(
                 controls=[
                     ft.CircleAvatar(
-                        content=ft.Text(user_name[:1].upper(), color=COLOR_PRIMARY, weight=ft.FontWeight.BOLD),
+                        content=ft.Text(
+                            user_name[:1].upper() if user_name else "U",
+                            color=COLOR_PRIMARY,
+                            weight=ft.FontWeight.BOLD,
+                            size=11 if is_compact else 13
+                        ),
                         bgcolor="#e2e8f0",
-                        radius=16
+                        radius=12 if is_compact else 15
                     ),
-                    ft.Text(user_name, size=13, weight=ft.FontWeight.W_500, color=ft.Colors.WHITE)
+                    *( [ft.Text(user_name, size=12, weight=ft.FontWeight.W_500, color=ft.Colors.WHITE)] if not is_compact else [] )
                 ],
-                spacing=8
+                spacing=4 if is_compact else 6
             ),
             ft.IconButton(
                 icon=ft.Icons.LOGOUT,
                 icon_color=ft.Colors.WHITE,
+                icon_size=18 if is_compact else 20,
                 tooltip="Log Out",
                 on_click=lambda _: on_logout()
             ),
-            ft.Container(width=6)
+            ft.Container(width=2 if is_compact else 4)
         ]
     )
 
@@ -201,12 +220,58 @@ def create_navigation_rail(
             ft.NavigationRailDestination(icon=ft.Icons.MANAGE_ACCOUNTS_OUTLINED, selected_icon=ft.Icons.MANAGE_ACCOUNTS, label="Account Mgmt"),
         ]
 
+    safe_index = min(selected_index, len(destinations) - 1) if destinations else 0
+
     return ft.NavigationRail(
-        selected_index=selected_index,
+        selected_index=safe_index,
         label_type=ft.NavigationRailLabelType.NONE if compact else ft.NavigationRailLabelType.ALL,
-        min_width=56 if compact else 90,
-        min_extended_width=160,
+        min_width=56 if compact else 100,
+        min_extended_width=180,
         destinations=destinations,
         on_change=lambda e: on_destination_selected(e.control.selected_index),
         bgcolor=colors["surface"]
+    )
+
+
+def create_bottom_nav_bar(
+    role: str,
+    selected_index: int,
+    on_destination_selected: Callable[[int], None]
+) -> ft.NavigationBar:
+    """Builds role-specific bottom navigation bar for mobile screens (Image 3)."""
+    destinations = []
+    if role == UserRole.STUDENT.value:
+        destinations = [
+            ft.NavigationBarDestination(icon=ft.Icons.DASHBOARD_OUTLINED, selected_icon=ft.Icons.DASHBOARD, label="Home"),
+            ft.NavigationBarDestination(icon=ft.Icons.ADD_COMMENT_OUTLINED, selected_icon=ft.Icons.ADD_COMMENT, label="New"),
+            ft.NavigationBarDestination(icon=ft.Icons.FOLDER_OUTLINED, selected_icon=ft.Icons.FOLDER, label="My"),
+            ft.NavigationBarDestination(icon=ft.Icons.RATE_REVIEW_OUTLINED, selected_icon=ft.Icons.RATE_REVIEW, label="Feedback"),
+            ft.NavigationBarDestination(icon=ft.Icons.HOTEL_OUTLINED, selected_icon=ft.Icons.HOTEL, label="Hostel"),
+            ft.NavigationBarDestination(icon=ft.Icons.MANAGE_ACCOUNTS_OUTLINED, selected_icon=ft.Icons.MANAGE_ACCOUNTS, label="Account"),
+        ]
+    elif role == UserRole.COORDINATOR.value:
+        destinations = [
+            ft.NavigationBarDestination(icon=ft.Icons.DASHBOARD_OUTLINED, selected_icon=ft.Icons.DASHBOARD, label="Home"),
+            ft.NavigationBarDestination(icon=ft.Icons.LIST_ALT_OUTLINED, selected_icon=ft.Icons.LIST_ALT, label="Complaints"),
+            ft.NavigationBarDestination(icon=ft.Icons.DYNAMIC_FEED_OUTLINED, selected_icon=ft.Icons.DYNAMIC_FEED, label="Groups"),
+            ft.NavigationBarDestination(icon=ft.Icons.BADGE_OUTLINED, selected_icon=ft.Icons.BADGE, label="Rolls"),
+            ft.NavigationBarDestination(icon=ft.Icons.BAR_CHART_OUTLINED, selected_icon=ft.Icons.BAR_CHART, label="Reports"),
+            ft.NavigationBarDestination(icon=ft.Icons.MANAGE_ACCOUNTS_OUTLINED, selected_icon=ft.Icons.MANAGE_ACCOUNTS, label="Account"),
+        ]
+    else:
+        # Default staff bottom bar
+        destinations = [
+            ft.NavigationBarDestination(icon=ft.Icons.DASHBOARD_OUTLINED, selected_icon=ft.Icons.DASHBOARD, label="Home"),
+            ft.NavigationBarDestination(icon=ft.Icons.LIST_ALT_OUTLINED, selected_icon=ft.Icons.LIST_ALT, label="Complaints"),
+            ft.NavigationBarDestination(icon=ft.Icons.DYNAMIC_FEED_OUTLINED, selected_icon=ft.Icons.DYNAMIC_FEED, label="Groups"),
+            ft.NavigationBarDestination(icon=ft.Icons.ANALYTICS_OUTLINED, selected_icon=ft.Icons.ANALYTICS, label="Reports"),
+            ft.NavigationBarDestination(icon=ft.Icons.MANAGE_ACCOUNTS_OUTLINED, selected_icon=ft.Icons.MANAGE_ACCOUNTS, label="Account"),
+        ]
+
+    safe_index = min(selected_index, len(destinations) - 1) if destinations else 0
+
+    return ft.NavigationBar(
+        destinations=destinations,
+        selected_index=safe_index,
+        on_change=lambda e: on_destination_selected(e.control.selected_index)
     )

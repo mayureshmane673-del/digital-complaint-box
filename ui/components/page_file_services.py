@@ -41,13 +41,16 @@ SESSION_KEY_PICKER_INVOCATION_ID = "_dcb_picker_invocation_id"
 
 def _get_session_store(page: ft.Page) -> Optional[Dict[str, Any]]:
     """Get the session store, creating if needed. Returns None if no valid session store."""
-    if not hasattr(page, "session") or not page.session or not hasattr(page.session, "store"):
+    try:
+        if not hasattr(page, "session") or not page.session or not hasattr(page.session, "store"):
+            return None
+        store = page.session.store
+        # Handle MagicMock in tests - if store is a MagicMock, treat as no store
+        if type(store).__name__ == "MagicMock":
+            return None
+        return store
+    except Exception:
         return None
-    store = page.session.store
-    # Handle MagicMock in tests - if store is a MagicMock, treat as no store
-    if type(store).__name__ == "MagicMock":
-        return None
-    return store
 
 
 def _register_picker(page: ft.Page, picker: ft.FilePicker, attr: str) -> ft.FilePicker:

@@ -487,31 +487,37 @@ class AuthService:
 
         client = get_trusted_backend_client()
 
-        # Fetch staff user
-        try:
+        # Fetch staff user and security code concurrently
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _fetch_staff():
             gen_id = SecurityCodeService._get_special_dept_id("GEN")
             lib_id = SecurityCodeService._get_special_dept_id("LIB")
 
             if role == UserRole.GENERAL_HOD.value:
                 # Query by username and General Department
                 res = client.table("staff_users").select("*").eq("username", clean_user).execute()
-                valid_rows = [
+                return [
                     r for r in (res.data or [])
                     if r.get("role") == "General Department HOD" or (r.get("role") == "HOD" and str(r.get("department_id")) == str(gen_id))
                 ]
-                staff_matches = valid_rows
             elif role == UserRole.LIBRARY_INCHARGE.value:
                 # Query by username and Library Department or Library Incharge role
                 res = client.table("staff_users").select("*").eq("username", clean_user).execute()
-                valid_rows = [
+                return [
                     r for r in (res.data or [])
                     if r.get("role") == "Library Incharge" or (r.get("role") == "HOD" and str(r.get("department_id")) == str(lib_id))
                 ]
-                staff_matches = valid_rows
             else:
                 res = client.table("staff_users").select("*").eq("username", clean_user).eq("role", role).execute()
-                staff_matches = res.data or []
+                return res.data or []
 
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                staff_fut = executor.submit(_fetch_staff)
+                code_fut = executor.submit(lambda: SecurityCodeService.get_code_record(role, department_id))
+                staff_matches = staff_fut.result()
+                _ = code_fut.result()
         except Exception as ex:
             logger.error("Database error during staff login: %s", ex)
             return False, "Invalid username, password, or security code.", None

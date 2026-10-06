@@ -6,7 +6,7 @@ Supports responsive reflow and Dark Mode styling.
 from typing import Dict, Any, Callable, Optional
 import flet as ft
 from ui.theme import (
-    COLOR_PRIMARY, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors
+    COLOR_PRIMARY, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow
 )
 from ui.state import AppState
 from utils.helpers import format_datetime
@@ -18,7 +18,7 @@ def create_complaint_card(
     is_staff: bool = False,
     on_delete: Optional[Callable[[Dict[str, Any]], None]] = None
 ) -> ft.Container:
-    """Renders a complaint card with full Dark Mode and responsive support."""
+    """Renders a complaint card with full Dark Mode, elevation, and responsive support."""
     is_dark = AppState.is_dark_mode
     colors = get_theme_colors(is_dark)
 
@@ -30,6 +30,8 @@ def create_complaint_card(
     priority = complaint.get("priority", "Low")
     is_anon = complaint.get("is_anonymous", False)
     is_hostel = complaint.get("is_hostel", False)
+    created_at = complaint.get("created_at") or ""
+    date_str = str(created_at)[:10] if created_at else ""
 
     # Categories & Locations
     cat_name = complaint.get("categories", {}).get("name") if isinstance(complaint.get("categories"), dict) else (complaint.get("category_name") or "General")
@@ -77,6 +79,19 @@ def create_complaint_card(
             )
         )
     )
+
+    if date_str:
+        header_chips.append(
+            ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.CALENDAR_TODAY_OUTLINED, size=11, color=colors["text_muted"]),
+                        ft.Text(date_str, size=11, color=colors["text_muted"])
+                    ],
+                    spacing=2
+                )
+            )
+        )
 
     if is_hostel:
         header_chips.append(
@@ -129,14 +144,26 @@ def create_complaint_card(
                             controls=[
                                 # Status Pill
                                 ft.Container(
-                                    content=ft.Text(status, size=12, weight=ft.FontWeight.W_600, color=status_color),
+                                    content=ft.Row(
+                                        controls=[
+                                            ft.Container(width=6, height=6, border_radius=3, bgcolor=status_color),
+                                            ft.Text(status, size=11, weight=ft.FontWeight.W_600, color=status_color),
+                                        ],
+                                        spacing=5
+                                    ),
                                     bgcolor=ft.Colors.with_opacity(0.12, status_color),
                                     border_radius=20,
                                     padding=ft.padding.symmetric(horizontal=10, vertical=4)
                                 ),
                                 # Priority Pill
                                 ft.Container(
-                                    content=ft.Text(priority, size=12, weight=ft.FontWeight.W_600, color=priority_color),
+                                    content=ft.Row(
+                                        controls=[
+                                            ft.Container(width=6, height=6, border_radius=3, bgcolor=priority_color),
+                                            ft.Text(priority, size=11, weight=ft.FontWeight.W_600, color=priority_color),
+                                        ],
+                                        spacing=5
+                                    ),
                                     bgcolor=ft.Colors.with_opacity(0.12, priority_color),
                                     border_radius=20,
                                     padding=ft.padding.symmetric(horizontal=10, vertical=4)
@@ -165,8 +192,13 @@ def create_complaint_card(
                                     ] if (on_delete and not is_staff and status == "Pending" and not complaint.get("has_admin_action")) else []
                                 ),
                                 ft.ElevatedButton(
-                                    content=ft.Text("View Details"),
-                                    icon=ft.Icons.ARROW_FORWARD,
+                                    content=ft.Row(
+                                        controls=[
+                                            ft.Text("View Details", size=12, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
+                                            ft.Icon(ft.Icons.ARROW_FORWARD, size=14, color=ft.Colors.WHITE)
+                                        ],
+                                        spacing=4
+                                    ),
                                     style=ft.ButtonStyle(
                                         bgcolor=colors["primary"],
                                         color=ft.Colors.WHITE,
@@ -186,9 +218,15 @@ def create_complaint_card(
             ],
             spacing=10
         ),
-        bgcolor=colors["surface"],
-        border=ft.Border.all(1, colors["border"]),
-        border_radius=12,
+        bgcolor=colors["card_bg"],
+        border=ft.Border(
+            left=ft.BorderSide(4, status_color),
+            top=ft.BorderSide(1, colors["border"]),
+            right=ft.BorderSide(1, colors["border"]),
+            bottom=ft.BorderSide(1, colors["border"])
+        ),
+        border_radius=14,
         padding=16,
+        shadow=get_card_shadow(is_dark),
         margin=ft.margin.only(bottom=12)
     )

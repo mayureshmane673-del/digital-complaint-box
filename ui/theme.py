@@ -2,13 +2,15 @@
 ui/theme.py: Modern college portal design system and Material 3 theme configuration.
 """
 
+from typing import Any, Optional, Dict
 import flet as ft
 import ui.flet_compat
 
 # Color Palette (Light Theme Defaults)
-COLOR_PRIMARY = "#1e3a8a"       # Deep Navy
-COLOR_PRIMARY_HOVER = "#172554"
-COLOR_PRIMARY_LIGHT = "#3b82f6" # Accent Blue
+COLOR_PRIMARY = "#1e40af"       # Royal Blue (Image 3)
+COLOR_PRIMARY_HOVER = "#1d4ed8" # Blue 700
+COLOR_PRIMARY_LIGHT = "#3b82f6" # Accent Blue 500
+COLOR_ACCENT = "#6366f1"        # Soft Indigo
 COLOR_SECONDARY = "#0f766e"     # Teal
 COLOR_BG = "#f8fafc"            # Slate light background
 COLOR_SURFACE = "#ffffff"       # Card / Container background
@@ -56,6 +58,8 @@ def get_theme_colors(is_dark: bool = False):
             "border": COLOR_BORDER_DARK,
             "primary": COLOR_PRIMARY_DARK,
             "primary_hover": "#60a5fa",
+            "accent": "#818cf8",
+            "card_bg": "#1e293b",
             "is_dark": True
         }
     return {
@@ -67,8 +71,66 @@ def get_theme_colors(is_dark: bool = False):
         "border": COLOR_BORDER,
         "primary": COLOR_PRIMARY,
         "primary_hover": COLOR_PRIMARY_HOVER,
+        "accent": COLOR_ACCENT,
+        "card_bg": "#ffffff",
         "is_dark": False
     }
+
+
+def get_card_shadow(is_dark: bool = False) -> list:
+    """Returns subtle professional elevation shadow."""
+    if is_dark:
+        return [
+            ft.BoxShadow(
+                spread_radius=0,
+                blur_radius=14,
+                color=ft.Colors.with_opacity(0.35, "#000000"),
+                offset=ft.Offset(0, 4)
+            )
+        ]
+    return [
+        ft.BoxShadow(
+            spread_radius=0,
+            blur_radius=14,
+            color=ft.Colors.with_opacity(0.06, "#0f172a"),
+            offset=ft.Offset(0, 4)
+        )
+    ]
+
+
+def create_glass_card(
+    content: ft.Control,
+    padding: Any = 16,
+    border_radius: int = 16,
+    is_dark: bool = False,
+    border_color: str = None,
+    bgcolor: str = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    col: Optional[Dict[str, int]] = None,
+    expand: bool = False,
+    margin: Any = None,
+    on_click: Any = None
+) -> ft.Container:
+    """Creates a modern glassmorphic card container with soft border and subtle shadow."""
+    colors = get_theme_colors(is_dark)
+    bg = bgcolor or colors["card_bg"]
+    border_c = border_color or colors["border"]
+
+    return ft.Container(
+        content=content,
+        bgcolor=bg,
+        border=ft.Border.all(1, border_c),
+        border_radius=border_radius,
+        padding=padding,
+        margin=margin,
+        shadow=get_card_shadow(is_dark),
+        width=width,
+        height=height,
+        col=col,
+        expand=expand,
+        on_click=on_click
+    )
 
 
 STATUS_BADGE_STYLES = {
@@ -105,9 +167,21 @@ def create_status_badge(status: str, is_dark: bool = False) -> ft.Container:
     text_color = style["dark_text"] if is_dark else style["light_text"]
 
     return ft.Container(
-        content=ft.Text(status, size=11, weight=ft.FontWeight.W_600, color=text_color),
+        content=ft.Row(
+            controls=[
+                ft.Container(
+                    width=6, height=6,
+                    border_radius=3,
+                    bgcolor=text_color
+                ),
+                ft.Text(status, size=11, weight=ft.FontWeight.W_600, color=text_color),
+            ],
+            spacing=5,
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER
+        ),
         bgcolor=bg_color,
-        border_radius=12,
+        border_radius=20,
         padding=ft.padding.symmetric(horizontal=10, vertical=4)
     )
 
@@ -116,9 +190,21 @@ def create_priority_badge(priority: str, is_dark: bool = False) -> ft.Container:
     """Renders a modern pill priority badge."""
     p_color = PRIORITY_COLORS.get(priority, "#64748b")
     return ft.Container(
-        content=ft.Text(priority, size=11, weight=ft.FontWeight.W_600, color=p_color),
+        content=ft.Row(
+            controls=[
+                ft.Container(
+                    width=6, height=6,
+                    border_radius=3,
+                    bgcolor=p_color
+                ),
+                ft.Text(priority, size=11, weight=ft.FontWeight.W_600, color=p_color),
+            ],
+            spacing=5,
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER
+        ),
         bgcolor=ft.Colors.with_opacity(0.12 if not is_dark else 0.22, p_color),
-        border_radius=12,
+        border_radius=20,
         padding=ft.padding.symmetric(horizontal=10, vertical=4)
     )
 

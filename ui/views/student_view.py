@@ -20,9 +20,10 @@ from services.analytics_service import AnalyticsService
 from database.supabase_client import get_supabase_client, get_trusted_backend_client
 from ui.theme import (
     COLOR_PRIMARY, COLOR_SURFACE, COLOR_BORDER, COLOR_TEXT_PRIMARY,
-    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors
+    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow
 )
 from ui.state import AppState
+from ui.components.college_hero import create_dashboard_welcome_banner
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
 from ui.components.stat_card import create_stat_card
 from ui.components.complaint_card import create_complaint_card
@@ -90,34 +91,41 @@ class StudentView:
         self._switch_view(self.selected_tab_index)
         return self.active_container
 
-    def _create_dashboard_skeleton(self) -> ft.Control:
-        """Lightweight loading skeleton shown while dashboard data loads."""
-        is_dark = AppState.is_dark_mode
-        colors = get_theme_colors(is_dark)
-        placeholder_color = colors.get("surface_variant", "#f1f5f9")
-        return ft.Column(
-            controls=[
-                ft.Text("Dashboard", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                ft.Row(
-                    controls=[
-                        ft.Container(width=140, height=80, bgcolor=placeholder_color, border_radius=12)
-                        for _ in range(4)
-                    ],
-                    wrap=True, spacing=12
-                ),
-                ft.Container(
-                    content=ft.Row(
-                        controls=[
-                            ft.ProgressRing(width=24, height=24, stroke_width=3, color=colors["primary"]),
-                            ft.Text("Loading your complaints...", size=14, color=colors["text_muted"])
-                        ],
-                        spacing=12
-                    ),
-                    padding=24
+    def _trigger_progressive_dashboard_load(self):
+        """Asynchronously loads complaints in background thread and updates dashboard in-place."""
+        if getattr(self, "_dashboard_loading", False):
+            return
+        self._dashboard_loading = True
+
+        import threading
+        def _fetch_worker():
+            try:
+                cmps = ComplaintService.get_complaints_for_user(
+                    role="Student",
+                    user_id=self.student_id,
+                    department_id=self.department_id
                 )
-            ],
-            spacing=14, expand=True
-        )
+                self.cached_complaints = cmps or []
+                self._dashboard_loading = False
+                if self.selected_tab_index == 0:
+                    self.active_container.content = self._render_dashboard()
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.error("Error progressively loading student complaints: %s", e)
+                self._dashboard_loading = False
+                if self.cached_complaints is None:
+                    self.cached_complaints = []
+                if self.selected_tab_index == 0:
+                    self.active_container.content = self._render_dashboard()
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_fetch_worker, daemon=True).start()
 
     def _ensure_reference_data_loaded(self):
         if not self.categories:
@@ -133,16 +141,8 @@ class StudentView:
             pass
         save_active_tab(self.page, index, owner_id=self.student_id)
         if index == 0:
-            # Show skeleton immediately, then load dashboard data
             if self.cached_complaints is None:
-                self.active_container.content = self._create_dashboard_skeleton()
-                self.page.update()
-                # Fetch data then render real dashboard
-                self.cached_complaints = ComplaintService.get_complaints_for_user(
-                    role="Student",
-                    user_id=self.student_id,
-                    department_id=self.department_id
-                )
+                self._trigger_progressive_dashboard_load()
             self.active_container.content = self._render_dashboard()
         elif index == 1:
             self.active_container.content = self._render_new_complaint()
@@ -169,17 +169,119 @@ class StudentView:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        # Use cached complaints if available, otherwise fetch inline (fast path
-        # after first load). For the very first load the data is fetched once
-        # here; subsequent tab switches reuse self.cached_complaints.
-        if self.cached_complaints is None:
-            self.cached_complaints = ComplaintService.get_complaints_for_user(
-                role="Student",
-                user_id=self.student_id,
-                department_id=self.department_id
-            )
-        complaints = self.cached_complaints
+        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
+        dept_display = AppState.department_name or AppState.department_code or ""
+        welcome_banner = create_dashboard_welcome_banner(
+            user_name=self.student.get('full_name', 'Student'),
+            roll_number=self.roll_number,
+            year=self.student.get('year', ''),
+            dept_name=dept_display,
+            role_text="Student",
+            on_new_complaint=lambda: self._switch_view(1),
+            is_dark=is_dark,
+            compact=is_compact
+        )
 
+        recent_header = ft.Row(
+            controls=[
+                ft.Text("Recent Complaints", size=18, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                ft.TextButton(
+                    content=ft.Row([
+                        ft.Text("View All", size=13, weight=ft.FontWeight.W_600, color=colors["primary"]),
+                        ft.Icon(ft.Icons.ARROW_FORWARD, size=14, color=colors["primary"])
+                    ], spacing=4),
+                    on_click=lambda _: self._switch_view(2)
+                )
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER
+        )
+
+        # Progressive Shell: If complaints are still loading in background, render skeleton cards immediately
+        if self.cached_complaints is None:
+            stats_row = ft.ResponsiveRow(
+                controls=[
+                    create_stat_card("Total Submitted", "—", ft.Icons.FOLDER_SPECIAL, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                    create_stat_card("Pending Review", "—", ft.Icons.HOURGLASS_EMPTY, "#d97706", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                    create_stat_card("In Progress", "—", ft.Icons.AUTORENEW, "#2563eb", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                    create_stat_card("Resolved", "—", ft.Icons.CHECK_CIRCLE, "#059669", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                    create_stat_card("Rejected", "—", ft.Icons.CANCEL, "#dc2626", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2})
+                ],
+                spacing=12,
+                run_spacing=12
+            )
+
+            placeholder_chart = ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Row([
+                            ft.ProgressRing(width=20, height=20, stroke_width=2.5, color=colors["primary"]),
+                            ft.Text("Loading resolution analytics...", size=13, color=colors["text_muted"])
+                        ], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER
+                ),
+                height=220,
+                border_radius=16,
+                bgcolor=colors.get("card_bg", colors.get("surface", "#ffffff")),
+                border=ft.border.all(1, colors.get("border", "#e2e8f0")),
+                alignment=ft.alignment.center,
+                col={"xs": 12, "md": 7}
+            )
+
+            placeholder_prio = ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Row([
+                            ft.ProgressRing(width=20, height=20, stroke_width=2.5, color=colors["primary"]),
+                            ft.Text("Loading priority distribution...", size=13, color=colors["text_muted"])
+                        ], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER
+                ),
+                height=220,
+                border_radius=16,
+                bgcolor=colors.get("card_bg", colors.get("surface", "#ffffff")),
+                border=ft.border.all(1, colors.get("border", "#e2e8f0")),
+                alignment=ft.alignment.center,
+                col={"xs": 12, "md": 5}
+            )
+
+            charts_row = ft.ResponsiveRow(
+                controls=[placeholder_chart, placeholder_prio],
+                spacing=12,
+                run_spacing=12
+            )
+
+            loading_recent = ft.Container(
+                content=ft.Row([
+                    ft.ProgressRing(width=20, height=20, stroke_width=2.5, color=colors["primary"]),
+                    ft.Text("Loading your recent grievances...", size=13, color=colors["text_muted"])
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
+                padding=28,
+                border_radius=12,
+                bgcolor=colors.get("card_bg", colors.get("surface", "#ffffff")),
+                border=ft.border.all(1, colors.get("border", "#e2e8f0"))
+            )
+
+            return ft.Column(
+                controls=[
+                    welcome_banner,
+                    stats_row,
+                    charts_row,
+                    ft.Divider(color=colors["border"]),
+                    recent_header,
+                    loading_recent
+                ],
+                scroll=ft.ScrollMode.AUTO,
+                spacing=16,
+                expand=True
+            )
+
+        # Full Dashboard when data is ready
+        complaints = self.cached_complaints
         total = len(complaints)
         pending = sum(1 for c in complaints if c.get("status") == "Pending")
         in_prog = sum(1 for c in complaints if c.get("status") == "In Progress")
@@ -187,16 +289,16 @@ class StudentView:
         rejected = sum(1 for c in complaints if c.get("status") == "Rejected")
 
         # Stat cards
-        stats_row = ft.Row(
+        stats_row = ft.ResponsiveRow(
             controls=[
-                create_stat_card("Total Submitted", str(total), ft.Icons.FOLDER_SPECIAL, colors["primary"], is_dark=is_dark),
-                create_stat_card("Pending Review", str(pending), ft.Icons.HOURGLASS_EMPTY, "#d97706", is_dark=is_dark),
-                create_stat_card("In Progress", str(in_prog), ft.Icons.AUTORENEW, "#2563eb", is_dark=is_dark),
-                create_stat_card("Resolved", str(resolved), ft.Icons.CHECK_CIRCLE, "#059669", is_dark=is_dark),
-                create_stat_card("Rejected", str(rejected), ft.Icons.CANCEL, "#dc2626", is_dark=is_dark)
+                create_stat_card("Total Submitted", str(total), ft.Icons.FOLDER_SPECIAL, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                create_stat_card("Pending Review", str(pending), ft.Icons.HOURGLASS_EMPTY, "#d97706", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                create_stat_card("In Progress", str(in_prog), ft.Icons.AUTORENEW, "#2563eb", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                create_stat_card("Resolved", str(resolved), ft.Icons.CHECK_CIRCLE, "#059669", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+                create_stat_card("Rejected", str(rejected), ft.Icons.CANCEL, "#dc2626", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2})
             ],
-            wrap=True,
-            spacing=12
+            spacing=12,
+            run_spacing=12
         )
 
         # Animated Charts
@@ -252,29 +354,11 @@ class StudentView:
 
         return ft.Column(
             controls=[
-                ft.Row(
-                    controls=[
-                        ft.Column(
-                            controls=[
-                                ft.Text(f"Welcome back, {self.student.get('full_name')}!", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                                ft.Text(f"Roll Number: {self.roll_number} | Year: {self.student.get('year', 'N/A')}", size=13, color=colors["text_muted"])
-                            ],
-                            spacing=2
-                        ),
-                        ft.ElevatedButton(
-                            content=ft.Text("New Complaint"),
-                            icon=ft.Icons.ADD_COMMENT,
-                            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
-                            on_click=lambda _: self._switch_view(1)
-                        )
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    wrap=True
-                ),
+                welcome_banner,
                 stats_row,
                 charts_row,
                 ft.Divider(color=colors["border"]),
-                ft.Text("Recent Grievances", size=18, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                recent_header,
                 ft.Column(controls=recent_cards, spacing=8)
             ],
             scroll=ft.ScrollMode.AUTO,
@@ -666,16 +750,27 @@ class StudentView:
             for idx, f in enumerate(_get_selected_files(self.page)):
                 f_name = f.get("name", "attachment")
                 f_size = f.get("size", 0)
-                size_str = f"{f_size / 1024:.1f} KB" if f_size else ""
+                if f_size and f_size >= 1024 * 1024:
+                    size_str = f"{f_size / (1024 * 1024):.1f} MB"
+                elif f_size:
+                    size_str = f"{f_size / 1024:.1f} KB"
+                else:
+                    size_str = ""
 
                 def make_remover(i):
                     return lambda _: remove_file(i)
+
+                ext = f_name.rsplit(".", 1)[-1].lower() if "." in f_name else ""
+                icon_name = ft.Icons.IMAGE if ext in ("jpg", "jpeg", "png", "webp") else (ft.Icons.PICTURE_AS_PDF if ext == "pdf" else (ft.Icons.VIDEO_FILE if ext in ("mp4", "mov") else ft.Icons.ATTACH_FILE))
+                icon_color = "#2563eb" if ext in ("jpg", "jpeg", "png", "webp") else ("#dc2626" if ext == "pdf" else "#7c3aed")
 
                 del_btn = ft.IconButton(
                     icon=ft.Icons.DELETE_OUTLINE,
                     icon_color="#dc2626",
                     tooltip=f"Remove {f_name}",
                     icon_size=20,
+                    width=44,
+                    height=44,
                     on_click=make_remover(idx)
                 )
 
@@ -685,10 +780,23 @@ class StudentView:
                             controls=[
                                 ft.Row(
                                     controls=[
-                                        ft.Icon(ft.Icons.ATTACH_FILE, size=16, color=colors["primary"]),
-                                        ft.Text(f"{f_name} ({size_str})", size=13, weight=ft.FontWeight.W_500, color=colors["text"])
+                                        ft.Container(
+                                            content=ft.Icon(icon_name, size=20, color=icon_color),
+                                            bgcolor=ft.Colors.with_opacity(0.12, icon_color),
+                                            border_radius=8,
+                                            padding=8
+                                        ),
+                                        ft.Column(
+                                            controls=[
+                                                ft.Text(f_name, size=13, weight=ft.FontWeight.W_600, color=colors["text"], max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                                                ft.Text(size_str, size=11, color=colors["text_muted"])
+                                            ],
+                                            spacing=2,
+                                            expand=True
+                                        )
                                     ],
-                                    spacing=8
+                                    spacing=10,
+                                    expand=True
                                 ),
                                 del_btn
                             ],
@@ -696,8 +804,8 @@ class StudentView:
                             vertical_alignment=ft.CrossAxisAlignment.CENTER
                         ),
                         bgcolor=colors.get("surface_variant", "#f1f5f9"),
-                        padding=ft.padding.symmetric(horizontal=12, vertical=4),
-                        border_radius=8,
+                        padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                        border_radius=10,
                         border=ft.Border.all(1, colors["border"])
                     )
                 )
@@ -851,10 +959,77 @@ class StudentView:
 
         submit_btn.on_click = submit_form
 
+        # Stepper Progress Header matching Image 3 Panel 3
+        stepper_header = ft.Container(
+            content=ft.Row(
+                controls=[
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Container(content=ft.Text("1", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE), bgcolor=colors["primary"], border_radius=12, width=22, height=22, alignment=ft.Alignment.CENTER),
+                            ft.Text("Details", size=12, weight=ft.FontWeight.BOLD, color=colors["primary"])
+                        ], spacing=6),
+                        bgcolor=ft.Colors.with_opacity(0.08, colors["primary"]),
+                        border_radius=12,
+                        padding=ft.padding.symmetric(horizontal=8, vertical=4)
+                    ),
+                    ft.Icon(ft.Icons.CHEVRON_RIGHT, size=16, color=colors["border"]),
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Container(content=ft.Text("2", size=11, weight=ft.FontWeight.BOLD, color=colors["text_muted"]), bgcolor=colors.get("surface_variant", "#e2e8f0"), border_radius=12, width=22, height=22, alignment=ft.Alignment.CENTER),
+                            ft.Text("Category", size=12, color=colors["text_muted"])
+                        ], spacing=6),
+                        padding=ft.padding.symmetric(horizontal=8, vertical=4)
+                    ),
+                    ft.Icon(ft.Icons.CHEVRON_RIGHT, size=16, color=colors["border"]),
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Container(content=ft.Text("3", size=11, weight=ft.FontWeight.BOLD, color=colors["text_muted"]), bgcolor=colors.get("surface_variant", "#e2e8f0"), border_radius=12, width=22, height=22, alignment=ft.Alignment.CENTER),
+                            ft.Text("Attachments", size=12, color=colors["text_muted"])
+                        ], spacing=6),
+                        padding=ft.padding.symmetric(horizontal=8, vertical=4)
+                    ),
+                    ft.Icon(ft.Icons.CHEVRON_RIGHT, size=16, color=colors["border"]),
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Container(content=ft.Text("4", size=11, weight=ft.FontWeight.BOLD, color=colors["text_muted"]), bgcolor=colors.get("surface_variant", "#e2e8f0"), border_radius=12, width=22, height=22, alignment=ft.Alignment.CENTER),
+                            ft.Text("Review", size=12, color=colors["text_muted"])
+                        ], spacing=6),
+                        padding=ft.padding.symmetric(horizontal=8, vertical=4)
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.START,
+                wrap=True,
+                spacing=4
+            ),
+            margin=ft.margin.only(bottom=4)
+        )
+
+        upload_dropzone = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Icon(ft.Icons.CLOUD_UPLOAD_OUTLINED, size=32, color=colors["primary"]),
+                    ft.Text("Click to add files or browse device", size=13, weight=ft.FontWeight.W_600, color=colors["text"]),
+                    ft.Text("JPG, PNG, WEBP, MP4, MOV, PDF (Max 10MB each)", size=11, color=colors["text_muted"])
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=4
+            ),
+            border=ft.Border.all(1, ft.Colors.with_opacity(0.4, colors["primary"])),
+            border_radius=12,
+            padding=ft.padding.symmetric(vertical=16, horizontal=16),
+            bgcolor=ft.Colors.with_opacity(0.04, colors["primary"]),
+            alignment=ft.Alignment.CENTER,
+            on_click=on_pick_attachment
+        )
+
         return ft.Container(
             content=ft.Column(
                 controls=[
                     ft.Text("Register New Grievance", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                    ft.Text("Step-by-step guided form with attachments", size=12, color=colors["text_muted"]),
+                    ft.Divider(height=1, color=colors["border"]),
+                    stepper_header,
                     alert_box,
                     title_field,
                     desc_field,
@@ -882,6 +1057,7 @@ class StudentView:
                     ),
                     ft.Divider(color=colors["border"]),
                     ft.Text("Attachments (Max 2 files, up to 10MB each: JPG, PNG, WEBP, MP4, MOV, PDF)", size=13, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                    upload_dropzone,
                     ft.Row(
                         controls=[
                             attach_btn
@@ -894,10 +1070,11 @@ class StudentView:
                 spacing=12,
                 scroll=ft.ScrollMode.AUTO
             ),
-            bgcolor=colors["surface"],
+            bgcolor=colors["card_bg"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=14,
-            padding=24,
+            border_radius=18,
+            shadow=get_card_shadow(is_dark),
+            padding=22,
             expand=True
         )
 
@@ -1555,8 +1732,8 @@ class StudentView:
                                             color=fb_badge_color
                                         ),
                                         bgcolor=ft.Colors.with_opacity(0.12, fb_badge_color),
-                                        border_radius=6,
-                                        padding=ft.padding.symmetric(horizontal=8, vertical=3)
+                                        border_radius=20,
+                                        padding=ft.padding.symmetric(horizontal=10, vertical=4)
                                     ),
                                     ft.ElevatedButton(
                                         content=ft.Text("Give Feedback" if not already_gave else "View Details"),
@@ -1578,9 +1755,10 @@ class StudentView:
                     ),
                     bgcolor=colors["surface"],
                     border=ft.Border.all(1, colors["border"]),
-                    border_radius=10,
-                    padding=14,
-                    margin=ft.margin.only(bottom=8)
+                    border_radius=12,
+                    shadow=get_card_shadow(is_dark),
+                    padding=16,
+                    margin=ft.margin.only(bottom=10)
                 )
             )
 
@@ -1675,8 +1853,8 @@ class StudentView:
                         ft.Container(
                             content=ft.Text(status, size=13, weight=ft.FontWeight.BOLD, color=status_color),
                             bgcolor=ft.Colors.with_opacity(0.12, status_color),
-                            border_radius=8,
-                            padding=ft.padding.symmetric(horizontal=10, vertical=4)
+                            border_radius=20,
+                            padding=ft.padding.symmetric(horizontal=12, vertical=5)
                         )
                     ],
                     spacing=8
@@ -1696,8 +1874,8 @@ class StudentView:
                     ),
                     bgcolor="#450a0a" if is_dark else "#fef2f2",
                     border=ft.Border.all(1, "#991b1b" if is_dark else "#fecaca"),
-                    border_radius=8,
-                    padding=12
+                    border_radius=10,
+                    padding=14
                 )
             )
             rows.append(
@@ -1714,6 +1892,7 @@ class StudentView:
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
             border_radius=14,
+            shadow=get_card_shadow(is_dark),
             padding=24,
             expand=True
         )

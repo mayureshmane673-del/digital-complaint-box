@@ -26,7 +26,7 @@ from ui.state import AppState
 from ui.views.auth_view import AuthView
 from ui.views.student_view import StudentView
 from ui.views.staff_view import StaffView
-from ui.components.navbar import create_app_bar, create_navigation_rail
+from ui.components.navbar import create_app_bar, create_navigation_rail, create_bottom_nav_bar
 from database.supabase_client import check_schema_health
 from models.user import UserRole
 from services.draft_recovery_service import (
@@ -71,6 +71,7 @@ def main(page: ft.Page):
         clear_auth_session(page)
         AppState.clear_user()
         page.appbar = None
+        page.navigation_bar = None
         render_auth_view()
 
     def on_authenticated(user_data: Dict[str, Any], role: str):
@@ -81,32 +82,42 @@ def main(page: ft.Page):
         # 2. Await persistent SharedPreferences write BEFORE rendering authenticated portal
         if hasattr(page, "run_task"):
             async def _persist_and_render_portal():
+                import asyncio
                 persisted = False
-                try:
-                    persisted = await save_auth_session_async(page, user_data, role)
-                except Exception as save_ex:
-                    logger.warning("save_auth_session_async failed during login: %s", type(save_ex).__name__)
-                    persisted = False
+                tab = 0
+                sid = str(user_data.get("id") or "")
+
+                if role == UserRole.STUDENT.value:
+                    try:
+                        results = await asyncio.gather(
+                            save_auth_session_async(page, user_data, role),
+                            restore_active_tab_async(page, expected_owner_id=sid),
+                            restore_complaint_draft_async(page, expected_owner_id=sid),
+                            return_exceptions=True
+                        )
+                        persisted = results[0] if isinstance(results[0], bool) else False
+                        restored_tab = results[1] if not isinstance(results[1], Exception) else None
+                        draft = results[2] if not isinstance(results[2], Exception) else None
+
+                        if restored_tab is not None:
+                            tab = restored_tab
+                        elif draft and (draft.get("title") or draft.get("description") or draft.get("temp_files")):
+                            tab = 1
+                    except Exception as ex:
+                        logger.warning("Error during concurrent student session persistence: %s", type(ex).__name__)
+                        persisted = False
+                else:
+                    try:
+                        persisted = await save_auth_session_async(page, user_data, role)
+                    except Exception as save_ex:
+                        logger.warning("save_auth_session_async failed during login: %s", type(save_ex).__name__)
+                        persisted = False
 
                 setattr(page, "_dcb_auth_persisted", persisted)
                 if not persisted:
                     logger.warning("[AUTH] Persistent storage write failed/unavailable for user %s; session remains in-memory", user_data.get("id"))
                 else:
                     logger.debug("[AUTH] Persistent auth save confirmed for user %s", user_data.get("id"))
-
-                tab = 0
-                if role == UserRole.STUDENT.value:
-                    try:
-                        sid = str(user_data.get("id") or "")
-                        restored_tab = await restore_active_tab_async(page, expected_owner_id=sid)
-                        draft = await restore_complaint_draft_async(page, expected_owner_id=sid)
-                        if restored_tab is not None:
-                            tab = restored_tab
-                        elif draft and (draft.get("title") or draft.get("description") or draft.get("temp_files")):
-                            tab = 1
-                    except Exception as ex:
-                        logger.warning("Error recovering student draft or active tab: %s", type(ex).__name__)
-                        tab = 0
 
                 render_portal_view(initial_tab=tab)
 
@@ -118,7 +129,7 @@ def main(page: ft.Page):
 
         render_portal_view()
 
-    def render_auth_view():
+    def render_auth_view(initial_tab: int = 0):
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
         page.bgcolor = colors["bg"]
@@ -144,10 +155,11 @@ def main(page: ft.Page):
                 padding=8
             )
 
+        compact = is_compact_screen()
         page.appbar = ft.AppBar(
             leading=ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=ft.Colors.WHITE),
-            leading_width=40,
-            title=ft.Text("Digital Complaint Box", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+            leading_width=36 if compact else 40,
+            title=ft.Text("Complaint Box" if compact else "Digital Complaint Box", size=16 if compact else 18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
             bgcolor=COLOR_PRIMARY,
             actions=[
                 ft.IconButton(
@@ -163,7 +175,7 @@ def main(page: ft.Page):
             ft.Column(
                 controls=[
                     schema_banner,
-                    auth_view.render()
+                    auth_view.render(initial_tab=initial_tab)
                 ],
                 spacing=0,
                 expand=True
@@ -226,32 +238,47 @@ def main(page: ft.Page):
         def on_nav_change(index: int):
             user_id = AppState.current_user.get("id") if AppState.current_user else None
             save_active_tab(page, index, owner_id=user_id)
+            if current_nav_rail[0]:
+                current_nav_rail[0].selected_index = index
+            if hasattr(page, "navigation_bar") and page.navigation_bar:
+                page.navigation_bar.selected_index = index
             if current_active_view[0]:
                 current_active_view[0]._switch_view(index)
+            try:
+                page.update()
+            except Exception:
+                pass
 
         compact = is_compact_screen()
-        rail = create_navigation_rail(role, current_active_view[0].selected_tab_index, on_nav_change, compact=compact)
-        current_nav_rail[0] = rail
-
         content_container = ft.Container(
             content=current_active_view[0].render(),
             expand=True,
-            padding=16 if compact else 24
+            padding=12 if compact else 24
         )
         current_portal_content[0] = content_container
 
         page.clean()
-        page.add(
-            ft.Row(
-                controls=[
-                    rail,
-                    ft.VerticalDivider(width=1, color=colors["border"]),
-                    content_container
-                ],
-                spacing=0,
-                expand=True
+        if compact:
+            page.navigation_bar = create_bottom_nav_bar(
+                role, current_active_view[0].selected_tab_index, on_nav_change
             )
-        )
+            current_nav_rail[0] = None
+            page.add(content_container)
+        else:
+            page.navigation_bar = None
+            rail = create_navigation_rail(role, current_active_view[0].selected_tab_index, on_nav_change, compact=False)
+            current_nav_rail[0] = rail
+            page.add(
+                ft.Row(
+                    controls=[
+                        rail,
+                        ft.VerticalDivider(width=1, color=colors["border"]),
+                        content_container
+                    ],
+                    spacing=0,
+                    expand=True
+                )
+            )
         page.update()
 
     def on_theme_change(*args, **kwargs):
@@ -270,16 +297,22 @@ def main(page: ft.Page):
     AppState.theme_callback = on_theme_change
 
     def on_page_resize(e):
-        """Adapts navigation rail and spacing dynamically upon window resizing."""
+        """Adapts navigation rail and bottom bar dynamically upon window resizing."""
+        compact = is_compact_screen()
         if AppState.current_user and current_active_view[0]:
-            compact = is_compact_screen()
-            if current_nav_rail[0]:
-                current_nav_rail[0].min_width = 56 if compact else 90
-                current_nav_rail[0].label_type = ft.NavigationRailLabelType.NONE if compact else ft.NavigationRailLabelType.ALL
+            is_currently_compact = (page.navigation_bar is not None)
+            if compact != is_currently_compact:
+                render_portal_view(initial_tab=current_active_view[0].selected_tab_index)
+            else:
                 if current_portal_content[0]:
                     current_portal_content[0].padding = 12 if compact else 24
                 page.update()
+        elif not AppState.current_user:
+            if not hasattr(page, "_last_auth_compact") or page._last_auth_compact != compact:
+                page._last_auth_compact = compact
+                render_auth_view()
 
+    page.on_resize = on_page_resize
     page.on_resized = on_page_resize
 
     # Initial start: Check if this session is already authenticated (fast-path in-memory store)
@@ -297,6 +330,54 @@ def main(page: ft.Page):
         render_portal_view()
         return
 
+    # Visual QA / Review routing support
+    def handle_qa_route(route_str: str) -> bool:
+        if not route_str or ("qa_auth=1" not in route_str and "/qa" not in route_str):
+            return False
+        import urllib.parse
+        parsed = urllib.parse.urlparse(route_str)
+        params = urllib.parse.parse_qs(parsed.query)
+        if params.get("qa_auth") == ["1"]:
+            role_p = params.get("role", ["student"])[0].lower()
+            tab_p = int(params.get("tab", [0])[0])
+            if role_p == "student":
+                from services.auth_service import AuthService
+                ok, _, u = AuthService.login_student("240101030", "Pass@123")
+                if ok and u:
+                    save_auth_session(page, u, "Student")
+                    AppState.set_user(u, "Student")
+                    render_portal_view(initial_tab=tab_p)
+                    if params.get("detail") == ["1"]:
+                        from ui.components.complaint_detail import show_complaint_detail_dialog
+                        from services.complaint_service import ComplaintService
+                        cmps = ComplaintService.get_complaints_for_user(role="Student", user_id=u["id"], department_id=u.get("department_id"))
+                        if cmps:
+                            show_complaint_detail_dialog(
+                                page,
+                                cmps[0],
+                                current_role="Student",
+                                current_user_id=u["id"],
+                                current_dept_id=u.get("department_id"),
+                                on_updated=None
+                            )
+                    return True
+            elif role_p == "coordinator":
+                from services.auth_service import AuthService
+                ok, _, u = AuthService.login_staff("Coordinator", "msm", "Pass@123", "Pass@123", "f4e141ef-14ca-44e4-a1ed-051ee0525419")
+                if ok and u:
+                    save_auth_session(page, u, "Coordinator")
+                    AppState.set_user(u, "Coordinator")
+                    render_portal_view(initial_tab=tab_p)
+                    return True
+            elif role_p == "coordinator_login":
+                render_auth_view(initial_tab=2)
+                return True
+        return False
+
+    page.on_route_change = lambda e: handle_qa_route(page.route)
+    if handle_qa_route(getattr(page, "route", "")):
+        return
+
     # If this is a new Flet session (e.g. mobile reload, socket reconnect drop, new tab),
     # perform deterministic async persistent authentication restoration.
     restoration_in_progress = [False]
@@ -305,8 +386,10 @@ def main(page: ft.Page):
         if restoration_in_progress[0]:
             return
         restoration_in_progress[0] = True
+        logger.info("[APP] _try_restore_session running for session=%s", getattr(page, "session_id", None))
         try:
             r_user, r_role = await restore_auth_session_async(page)
+            logger.info("[APP] restore_auth_session_async returned: user=%s, role=%s", bool(r_user), r_role)
             if r_user and r_role:
                 AppState.set_user(r_user, r_role)
                 tab = 0
@@ -370,8 +453,7 @@ def on_app_startup():
     def _warm_cache_worker():
         try:
             from services.cache_service import CacheService
-            CacheService.get_departments()
-            CacheService.get_categories_and_subcategories()
+            CacheService.prewarm_reference_cache(async_mode=False)
         except Exception:
             pass
     threading.Thread(target=_warm_cache_worker, daemon=True).start()

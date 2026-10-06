@@ -15,9 +15,10 @@ from services.analytics_service import AnalyticsService
 from database.supabase_client import get_supabase_client
 from ui.theme import (
     COLOR_PRIMARY, COLOR_SURFACE, COLOR_BORDER, COLOR_TEXT_PRIMARY,
-    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors
+    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow
 )
 from ui.state import AppState
+from ui.components.college_hero import create_dashboard_welcome_banner
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
 from ui.components.stat_card import create_stat_card
 from ui.components.complaint_card import create_complaint_card
@@ -111,12 +112,12 @@ class StaffView:
         metrics = self.cached_metrics
 
         stat_cards = [
-            create_stat_card("Total Active", str(metrics["total"]), ft.Icons.FOLDER, colors["primary"], is_dark=is_dark),
-            create_stat_card("Pending Action", str(metrics["pending"]), ft.Icons.HOURGLASS_TOP, "#d97706", is_dark=is_dark),
-            create_stat_card("In Progress", str(metrics["in_progress"]), ft.Icons.PENDING_ACTIONS, "#2563eb", is_dark=is_dark),
-            create_stat_card("Resolved", str(metrics["resolved"]), ft.Icons.TASK_ALT, "#059669", is_dark=is_dark),
-            create_stat_card("Urgent / High", str(metrics["urgent_high"]), ft.Icons.WARNING_AMBER, "#dc2626", is_dark=is_dark),
-            create_stat_card("Satisfaction", f"{metrics['satisfaction_rate']}%", ft.Icons.THUMB_UP_ALT, "#0f766e", is_dark=is_dark),
+            create_stat_card("Total Active", str(metrics["total"]), ft.Icons.FOLDER, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("Pending Action", str(metrics["pending"]), ft.Icons.HOURGLASS_TOP, "#d97706", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("In Progress", str(metrics["in_progress"]), ft.Icons.PENDING_ACTIONS, "#2563eb", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("Resolved", str(metrics["resolved"]), ft.Icons.TASK_ALT, "#059669", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("Urgent / High", str(metrics["urgent_high"]), ft.Icons.WARNING_AMBER, "#dc2626", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("Satisfaction", f"{metrics['satisfaction_rate']}%", ft.Icons.THUMB_UP_ALT, "#0f766e", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
         ]
 
         # Complaints in scope
@@ -174,16 +175,20 @@ class StaffView:
             except Exception:
                 campus_overview_card = None
 
+        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
+        welcome_banner = create_dashboard_welcome_banner(
+            user_name=self.staff.get('full_name', 'Faculty Member'),
+            role_text=f"{self.role} ({self.department_code or 'Campus-wide'})",
+            on_new_complaint=None,
+            is_dark=is_dark,
+            compact=is_compact
+        )
+
         dash_controls = [
+            welcome_banner,
             ft.Row(
                 controls=[
-                    ft.Column(
-                        controls=[
-                            ft.Text(f"{self.role} Dashboard", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                            ft.Text(f"Scope: {self.department_code or 'Campus-wide'} | Faculty: {self.staff.get('full_name')}", size=13, color=colors["text_muted"])
-                        ],
-                        spacing=2
-                    ),
+                    ft.Text(f"{self.role} Metrics Overview", size=18, weight=ft.FontWeight.BOLD, color=colors["text"]),
                     ft.ElevatedButton(
                         content=ft.Text("View All Complaints"),
                         icon=ft.Icons.LIST,
@@ -194,7 +199,7 @@ class StaffView:
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 wrap=True
             ),
-            ft.Row(controls=stat_cards, wrap=True, spacing=12),
+            ft.ResponsiveRow(controls=stat_cards, spacing=12),
         ]
         if campus_overview_card:
             dash_controls.append(campus_overview_card)
@@ -491,10 +496,10 @@ class StaffView:
                         controls=[
                             ft.Text(f"#{m_cid}", weight=ft.FontWeight.BOLD, size=13, color=colors["primary"]),
                             ft.Container(
-                                content=ft.Text(m_st, size=11, color=STATUS_COLORS.get(m_st, "#6b7280")),
+                                content=ft.Text(m_st, size=11, color=STATUS_COLORS.get(m_st, "#6b7280"), weight=ft.FontWeight.W_600),
                                 bgcolor=ft.Colors.with_opacity(0.12, STATUS_COLORS.get(m_st, "#6b7280")),
-                                border_radius=6,
-                                padding=ft.padding.symmetric(horizontal=6, vertical=2)
+                                border_radius=20,
+                                padding=ft.padding.symmetric(horizontal=8, vertical=2)
                             ),
                             ft.Text(f"Priority: {m_pri}", size=11, color=colors["text_muted"])
                         ],
@@ -515,7 +520,7 @@ class StaffView:
                                             ft.Container(
                                                 content=ft.Text(f"+{dup_count} Similar Complaints", size=12, weight=ft.FontWeight.BOLD, color="#b45309"),
                                                 bgcolor="#78350f" if is_dark else "#fef3c7",
-                                                border_radius=8,
+                                                border_radius=20,
                                                 padding=ft.padding.symmetric(horizontal=10, vertical=4)
                                             )
                                         ],
@@ -535,6 +540,7 @@ class StaffView:
                     bgcolor=colors["surface"],
                     border=ft.Border.all(1, colors["border"]),
                     border_radius=12,
+                    shadow=get_card_shadow(is_dark),
                     padding=16,
                     margin=ft.margin.only(bottom=12)
                 )
@@ -806,21 +812,34 @@ class StaffView:
             elif s_val == "DATE_DESC":
                 filtered.sort(key=lambda x: x["created_at"], reverse=True)
 
-            # Build rows
+            # Build rows and mobile cards
             new_rows = []
+            new_cards = []
             for item in filtered:
                 reg = item["is_reg"]
                 st_display = item["st_name"] if item["st_name"] else ("—" if not reg else "Registered")
 
-                # Action cell
+                # Action cell & mobile action button
+                card_actions = None
                 if reg and item.get("st_info") and item["st_info"].get("id"):
                     if item["y_key"] == "FE":
                         action_cell = ft.Text("FE (General Dept)", size=11, color=colors["text_muted"], italic=True)
+                        card_actions = ft.Text("FE (General Dept)", size=12, color=colors["text_muted"], italic=True)
                     else:
                         action_cell = ft.ElevatedButton(
                             content=ft.Text("Reset PW", size=11),
                             icon=ft.Icons.LOCK_RESET,
                             style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=8, vertical=2)),
+                            on_click=make_reset_handler(item["st_info"]["id"], item["roll"], item["st_name"])
+                        )
+                        card_actions = ft.ElevatedButton(
+                            content=ft.Row([ft.Icon(ft.Icons.LOCK_RESET, size=15), ft.Text("Reset Password", size=12)], spacing=4),
+                            style=ft.ButtonStyle(
+                                bgcolor=colors["primary"],
+                                color=ft.Colors.WHITE,
+                                padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                                shape=ft.RoundedRectangleBorder(radius=8)
+                            ),
                             on_click=make_reset_handler(item["st_info"]["id"], item["roll"], item["st_name"])
                         )
                 else:
@@ -834,7 +853,7 @@ class StaffView:
                                 ft.Container(
                                     content=ft.Text(item["y_lbl"], size=11, weight=ft.FontWeight.W_600, color=item["y_color"]),
                                     bgcolor=item["y_bg"],
-                                    border_radius=8,
+                                    border_radius=20,
                                     padding=ft.padding.symmetric(horizontal=8, vertical=3)
                                 ) if item["y_key"] != "NOT_REGISTERED" else ft.Text("—", size=13, color=colors["text_muted"])
                             ),
@@ -843,7 +862,7 @@ class StaffView:
                                 ft.Container(
                                     content=ft.Text("Registered" if reg else "Available", size=11, weight=ft.FontWeight.W_600, color="#059669" if reg else "#d97706"),
                                     bgcolor="#14532d" if (is_dark and reg) else ("#78350f" if is_dark else ("#dcfce7" if reg else "#fef3c7")),
-                                    border_radius=8,
+                                    border_radius=20,
                                     padding=ft.padding.symmetric(horizontal=8, vertical=2)
                                 )
                             ),
@@ -853,9 +872,87 @@ class StaffView:
                     )
                 )
 
+                # Mobile responsive card representation
+                new_cards.append(
+                    ft.Container(
+                        content=ft.Column(
+                            controls=[
+                                ft.Row(
+                                    controls=[
+                                        ft.Text(item["roll"], size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                                        ft.Container(
+                                            content=ft.Text("Registered" if reg else "Available", size=11, weight=ft.FontWeight.BOLD, color="#059669" if reg else "#d97706"),
+                                            bgcolor="#14532d" if (is_dark and reg) else ("#78350f" if is_dark else ("#dcfce7" if reg else "#fef3c7")),
+                                            border_radius=20,
+                                            padding=ft.padding.symmetric(horizontal=10, vertical=3)
+                                        )
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                                ),
+                                ft.Row(
+                                    controls=[
+                                        ft.Text("Student:", size=12, color=colors["text_muted"], width=70),
+                                        ft.Text(st_display, size=13, weight=ft.FontWeight.W_500, color=colors["text"] if item["st_name"] else colors["text_muted"], expand=True)
+                                    ],
+                                    spacing=4
+                                ),
+                                ft.Row(
+                                    controls=[
+                                        ft.Text("Year:", size=12, color=colors["text_muted"], width=70),
+                                        ft.Container(
+                                            content=ft.Text(item["y_lbl"], size=11, weight=ft.FontWeight.W_600, color=item["y_color"]),
+                                            bgcolor=item["y_bg"],
+                                            border_radius=20,
+                                            padding=ft.padding.symmetric(horizontal=8, vertical=2)
+                                        ) if item["y_key"] != "NOT_REGISTERED" else ft.Text("—", size=12, color=colors["text_muted"])
+                                    ],
+                                    spacing=4
+                                ),
+                                ft.Row(
+                                    controls=[
+                                        ft.Text("Added:", size=12, color=colors["text_muted"], width=70),
+                                        ft.Text(format_datetime(item["created_at"]), size=12, color=colors["text_muted"], expand=True)
+                                    ],
+                                    spacing=4
+                                ),
+                                *( [ft.Divider(color=colors["border"], height=4), card_actions] if card_actions else [] )
+                            ],
+                            spacing=6
+                        ),
+                        bgcolor=colors["surface"],
+                        border=ft.Border.all(1, colors["border"]),
+                        border_radius=12,
+                        shadow=get_card_shadow(is_dark),
+                        padding=14,
+                        margin=ft.margin.only(bottom=8)
+                    )
+                )
+
+            if not new_cards:
+                new_cards.append(
+                    ft.Container(
+                        content=ft.Text("No roll numbers match the filter criteria.", size=13, color=colors["text_muted"]),
+                        padding=20
+                    )
+                )
+
             data_table.rows = new_rows
+            mobile_cards_column.controls = new_cards
             count_text.value = f"Authorized Roll Numbers (Showing {len(filtered)} of {len(pool)})"
             self.page.update()
+
+        is_mobile = (getattr(self.page, "width", None) or 1200) < 768
+
+        scrollable_table = ft.Row(
+            controls=[data_table],
+            scroll=ft.ScrollMode.AUTO,
+            visible=not is_mobile
+        )
+        mobile_cards_column = ft.Column(
+            controls=[],
+            spacing=8,
+            visible=is_mobile
+        )
 
         year_filter.on_select = refresh_table
         year_filter.on_change = refresh_table
@@ -864,11 +961,6 @@ class StaffView:
         search_filter.on_change = refresh_table
 
         refresh_table()
-
-        scrollable_table = ft.Row(
-            controls=[data_table],
-            scroll=ft.ScrollMode.AUTO
-        )
 
         return ft.Column(
             controls=[
@@ -913,7 +1005,8 @@ class StaffView:
                     ]
                 ),
                 count_text,
-                scrollable_table
+                scrollable_table,
+                mobile_cards_column
             ],
             scroll=ft.ScrollMode.AUTO,
             spacing=16,
@@ -1056,8 +1149,8 @@ class StaffView:
             status_badge = ft.Container(
                 content=ft.Text(status.upper(), size=11, weight=ft.FontWeight.BOLD, color=st_color),
                 bgcolor=st_bg,
-                border_radius=6,
-                padding=ft.padding.symmetric(horizontal=10, vertical=4)
+                border_radius=20,
+                padding=ft.padding.symmetric(horizontal=12, vertical=4)
             )
 
             # Details card contents
@@ -1170,9 +1263,10 @@ class StaffView:
                     content=ft.Column(controls=card_content_items, spacing=8),
                     bgcolor=colors["surface"],
                     border=ft.Border.all(1, colors["border"]),
-                    border_radius=10,
-                    padding=14,
-                    margin=ft.margin.only(bottom=8)
+                    border_radius=12,
+                    shadow=get_card_shadow(is_dark),
+                    padding=16,
+                    margin=ft.margin.only(bottom=10)
                 )
             )
 

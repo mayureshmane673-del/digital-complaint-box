@@ -597,53 +597,37 @@ class ComplaintService:
             query = query.eq("is_deleted", False)
 
         if role == UserRole.STUDENT.value:
-            # Student gets direct complaints (student_id = user_id)
-            direct_query = client.table("complaints").select(
-                "*, departments(code, name), categories(name), subcategories(name), locations(name), students(year, roll_number, full_name)"
-            ).eq("student_id", user_id)
-            if not include_deleted:
-                direct_query = direct_query.eq("is_deleted", False)
-            if filters.get("status"):
-                direct_query = direct_query.eq("status", filters["status"])
-            if filters.get("priority"):
-                direct_query = direct_query.eq("priority", filters["priority"])
+            # Fetch anonymous complaint IDs mapped to this student
+            try:
+                anon_res = client.table("anonymous_complaint_owners").select("complaint_id").eq("student_id", user_id).execute()
+                anon_ids = [r["complaint_id"] for r in (anon_res.data or []) if r.get("complaint_id")]
+            except Exception:
+                anon_ids = []
 
-            # Also fetch anonymous complaints owned by this student
-            anon_query = client.table("anonymous_complaint_owners").select("complaint_id").eq("student_id", user_id)
-
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                f_direct = executor.submit(direct_query.execute)
-                f_anon = executor.submit(anon_query.execute)
-                try:
-                    direct_items = f_direct.result().data or []
-                except Exception:
-                    direct_items = []
-                try:
-                    anon_owner_rows = f_anon.result().data or []
-                except Exception:
-                    anon_owner_rows = []
-
-            anon_ids = [r["complaint_id"] for r in anon_owner_rows]
-
-            anon_items = []
+            # Single unified query for both direct and anonymous student complaints
             if anon_ids:
-                anon_c_query = client.table("complaints").select(
+                cond = f"student_id.eq.{user_id},complaint_id.in.({','.join(map(str, anon_ids))})"
+                c_query = client.table("complaints").select(
                     "*, departments(code, name), categories(name), subcategories(name), locations(name), students(year, roll_number, full_name)"
-                ).in_("complaint_id", anon_ids)
-                if not include_deleted:
-                    anon_c_query = anon_c_query.eq("is_deleted", False)
-                if filters.get("status"):
-                    anon_c_query = anon_c_query.eq("status", filters["status"])
-                if filters.get("priority"):
-                    anon_c_query = anon_c_query.eq("priority", filters["priority"])
-                try:
-                    anon_items = anon_c_query.execute().data or []
-                except Exception:
-                    anon_items = []
+                ).or_(cond)
+            else:
+                c_query = client.table("complaints").select(
+                    "*, departments(code, name), categories(name), subcategories(name), locations(name), students(year, roll_number, full_name)"
+                ).eq("student_id", user_id)
 
-            # Combine and sort by created_at desc
-            combined = {c["complaint_id"]: c for c in (direct_items + anon_items)}
-            results = sorted(combined.values(), key=lambda x: x.get("created_at", "") or "", reverse=True)
+            if not include_deleted:
+                c_query = c_query.eq("is_deleted", False)
+            if filters.get("status"):
+                c_query = c_query.eq("status", filters["status"])
+            if filters.get("priority"):
+                c_query = c_query.eq("priority", filters["priority"])
+
+            try:
+                res = c_query.order("created_at", desc=True).execute()
+                results = res.data or []
+            except Exception:
+                results = []
+
             return results
 
         elif role == UserRole.LIBRARY_INCHARGE.value:

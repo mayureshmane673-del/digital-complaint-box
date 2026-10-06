@@ -12,11 +12,12 @@ from services.auth_service import AuthService
 from database.supabase_client import get_supabase_client
 from ui.theme import (
     COLOR_PRIMARY, COLOR_PRIMARY_LIGHT, COLOR_SURFACE, COLOR_BORDER,
-    COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, get_theme_colors
+    COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, get_theme_colors, get_card_shadow
 )
 from ui.state import AppState
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
 from ui.components.animated_chart import create_hero_3d_badge
+from ui.components.college_hero import create_login_hero_panel
 from models.user import UserRole
 
 logger = logging.getLogger("complaint_box.auth_view")
@@ -72,7 +73,7 @@ class AuthView:
         container.hide_alert = hide
         return container
 
-    def render(self) -> ft.Control:
+    def render(self, initial_tab: int = 0) -> ft.Control:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
@@ -648,11 +649,14 @@ class AuthView:
         )
 
         tabs = ft.Tabs(
+            selected_index=initial_tab,
             length=4,
             content=ft.Column(
                 expand=True,
                 controls=[
                     ft.TabBar(
+                        scrollable=True,
+                        tab_alignment=ft.TabAlignment.START,
                         tabs=[
                             ft.Tab(label="Student Login", icon=ft.Icons.SCHOOL),
                             ft.Tab(label="Student Register", icon=ft.Icons.PERSON_ADD),
@@ -669,83 +673,71 @@ class AuthView:
             expand=True
         )
 
-        # Hero area (Left column on desktop, top on mobile/tablet)
-        hero_col = ft.Container(
-            content=ft.Column(
+        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
+
+        card_header = ft.Container(
+            content=ft.Row(
                 controls=[
                     ft.Container(
-                        content=ft.Text("INSTITUTIONAL GRIEVANCE REDRESSAL", size=10, weight=ft.FontWeight.BOLD, color=colors["primary"]),
+                        content=ft.Icon(ft.Icons.ACCOUNT_BALANCE, size=24, color=colors["primary"]),
                         bgcolor=ft.Colors.with_opacity(0.12, colors["primary"]),
-                        border_radius=8,
-                        padding=ft.padding.symmetric(horizontal=10, vertical=4)
+                        border_radius=12,
+                        padding=8
                     ),
-                    ft.Text("Digital Complaint Box", size=26, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                    ft.Text(
-                        "Empowering Students, Enabling Faculty.\nConfidential, role-isolated grievance resolution built on institutional integrity and trust.",
-                        size=13,
-                        color=colors["text_muted"],
-                        height=1.4
-                    ),
-                    ft.Container(height=6),
-                    ft.Container(
-                        content=ft.Row(
-                            controls=[
-                                ft.Icon(ft.Icons.VERIFIED_USER_OUTLINED, size=18, color=colors["primary"]),
-                                ft.Text("Role-Isolated Institutional Portal", size=12, weight=ft.FontWeight.W_600, color=colors["primary"])
-                            ],
-                            spacing=8
-                        ),
-                        bgcolor=ft.Colors.with_opacity(0.08, colors["primary"]),
-                        border_radius=8,
-                        padding=ft.padding.symmetric(horizontal=12, vertical=8),
-                        visible=bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
-                    ),
-                    ft.Container(
-                        content=create_hero_3d_badge(is_dark=is_dark),
-                        visible=not bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
-                    ),
-                    ft.Container(height=6),
                     ft.Column(
                         controls=[
-                            ft.Row(
-                                controls=[
-                                    ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color="#059669"),
-                                    ft.Text("5 Departments: CSE, AIDS, E&TC, MECH, Civil", size=12, color=colors["text"])
-                                ],
-                                spacing=8
-                            ),
-                            ft.Row(
-                                controls=[
-                                    ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color="#059669"),
-                                    ft.Text("Strict Role Isolation & Identity Masking", size=12, color=colors["text"])
-                                ],
-                                spacing=8
-                            ),
-                            ft.Row(
-                                controls=[
-                                    ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color="#059669"),
-                                    ft.Text("Zero Credential Leakage Architecture", size=12, color=colors["text"])
-                                ],
-                                spacing=8
-                            ),
+                            ft.Text("Digital Complaint Box", size=18, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                            ft.Text("Official Grievance Redressal Portal", size=11, color=colors["text_muted"])
                         ],
-                        spacing=8
+                        spacing=1
                     )
                 ],
-                spacing=8,
-                horizontal_alignment=ft.CrossAxisAlignment.START
+                spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER
             ),
-            padding=ft.padding.all(12),
-            col={"xs": 12, "md": 5, "lg": 5}
+            padding=ft.padding.only(left=16, right=16, top=14, bottom=6)
         )
 
         auth_card = ft.Container(
-            content=tabs,
-            bgcolor=colors["surface"],
+            content=ft.Column(
+                controls=[
+                    card_header,
+                    ft.Divider(height=1, color=colors["border"]),
+                    tabs
+                ],
+                spacing=0,
+                expand=True
+            ),
+            bgcolor=colors["card_bg"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=16,
-            height=580,
+            border_radius=18,
+            shadow=get_card_shadow(is_dark),
+            height=620,
             col={"xs": 12, "md": 7, "lg": 7}
+        )
+
+        if is_compact:
+            # Mobile layout: Stack compact campus hero banner at top, glass card below
+            mobile_hero = create_login_hero_panel(is_staff=False, is_dark=is_dark, compact=True)
+            return ft.Container(
+                content=ft.Column(
+                    controls=[
+                        mobile_hero,
+                        auth_card
+                    ],
+                    spacing=12,
+                    scroll=ft.ScrollMode.AUTO
+                ),
+                bgcolor=colors["bg"],
+                expand=True,
+                padding=12
+            )
+
+        # Desktop layout: Side-by-side campus hero panel + elevated glass login card
+        desktop_hero = ft.Container(
+            content=create_login_hero_panel(is_staff=False, is_dark=is_dark, compact=False),
+            height=620,
+            col={"xs": 12, "md": 5, "lg": 5}
         )
 
         return ft.Container(
@@ -753,11 +745,11 @@ class AuthView:
                 controls=[
                     ft.ResponsiveRow(
                         controls=[
-                            hero_col,
+                            desktop_hero,
                             auth_card
                         ],
-                        spacing=16,
-                        run_spacing=16,
+                        spacing=20,
+                        run_spacing=20,
                         vertical_alignment=ft.CrossAxisAlignment.START
                     )
                 ],
@@ -766,5 +758,5 @@ class AuthView:
             ),
             bgcolor=colors["bg"],
             expand=True,
-            padding=ft.padding.symmetric(horizontal=16, vertical=12)
+            padding=ft.padding.symmetric(horizontal=24, vertical=16)
         )

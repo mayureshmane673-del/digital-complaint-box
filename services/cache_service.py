@@ -13,17 +13,28 @@ from collections import defaultdict
 class CacheService:
     _lock = threading.RLock()
 
-    # Cached datasets
-    _departments: Optional[List[Dict[str, Any]]] = None
-    _departments_by_code: Optional[Dict[str, Dict[str, Any]]] = None
-    _departments_by_id: Optional[Dict[str, Dict[str, Any]]] = None
-    _special_dept_ids: Dict[str, str] = {}
+    DEFAULT_DEPARTMENTS: List[Dict[str, Any]] = [
+        {"id": "f4e141ef-14ca-44e4-a1ed-051ee0525419", "code": "CSE", "name": "Computer Science and Engineering"},
+        {"id": "06059c36-8a03-4f9e-9086-1d116a3bc533", "code": "AIDS", "name": "Artificial Intelligence and Data Science"},
+        {"id": "a90df03a-3243-4ce2-bdf1-3312c5b3d6f1", "code": "E&TC", "name": "Electronics and Telecommunication Engineering"},
+        {"id": "d05fe7ee-bfcf-41c3-8be2-72abcb71b802", "code": "MECH", "name": "Mechanical Engineering"},
+        {"id": "517fc5e3-cf9d-4340-9a4f-a2e6f4770176", "code": "Civil", "name": "Civil Engineering"},
+        {"id": "d7fda5ae-09ef-4324-9048-7b721bf89bf7", "code": "GEN", "name": "General Department"},
+        {"id": "955f5c89-535f-4324-a7e9-7e8762380ac9", "code": "LIB", "name": "Library Department"}
+    ]
+
+    # Pre-populate static canonical reference data at load time for sub-millisecond lookups
+    _departments: Optional[List[Dict[str, Any]]] = list(DEFAULT_DEPARTMENTS)
+    _departments_by_code: Optional[Dict[str, Dict[str, Any]]] = {d["code"].strip().upper(): d for d in DEFAULT_DEPARTMENTS}
+    _departments_by_id: Optional[Dict[str, Dict[str, Any]]] = {str(d["id"]): d for d in DEFAULT_DEPARTMENTS}
+    _special_dept_ids: Dict[str, str] = {d["code"].strip().upper(): str(d["id"]) for d in DEFAULT_DEPARTMENTS}
 
     _categories: Optional[List[Dict[str, Any]]] = None
     _locations: Optional[List[Dict[str, Any]]] = None
     _subcategories_by_cat: Optional[Dict[str, List[Dict[str, Any]]]] = None
 
     _security_codes_cache: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}
+    _issue_groups_cache: Dict[Tuple[Optional[str], Optional[str], Optional[bool]], Tuple[float, List[Dict[str, Any]]]] = {}
 
     # Signed URL cache: storage_path -> (expiry_timestamp, signed_url)
     _signed_urls: Dict[str, Tuple[float, str]] = {}
@@ -82,8 +93,10 @@ class CacheService:
             return None
         clean_id = str(dept_id).strip()
         with cls._lock:
-            if cls._departments_by_id is None:
-                cls.get_departments()
+            if cls._departments_by_id and clean_id in cls._departments_by_id:
+                return cls._departments_by_id[clean_id]
+            # Fallback refresh if unknown ID
+            cls.get_departments(force_refresh=True)
             if cls._departments_by_id:
                 return cls._departments_by_id.get(clean_id)
         return None
@@ -94,8 +107,9 @@ class CacheService:
             return None
         clean_code = str(code).strip().upper()
         with cls._lock:
-            if cls._departments_by_code is None:
-                cls.get_departments()
+            if cls._departments_by_code and clean_code in cls._departments_by_code:
+                return cls._departments_by_code[clean_code]
+            cls.get_departments(force_refresh=True)
             if cls._departments_by_code:
                 return cls._departments_by_code.get(clean_code)
         return None
@@ -134,29 +148,31 @@ class CacheService:
             from database.supabase_client import get_trusted_backend_client, get_supabase_client
             client = get_trusted_backend_client() or get_supabase_client()
 
-            # 1. Categories
-            try:
-                cat_res = client.table("categories").select("id, name").eq("is_active", True).execute()
-                categories = cat_res.data or []
-            except Exception:
-                categories = []
+            from concurrent.futures import ThreadPoolExecutor
+
+            # Fetch categories, locations, and subcategories in parallel
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                f_cat = executor.submit(lambda: client.table("categories").select("id, name").eq("is_active", True).execute())
+                f_loc = executor.submit(lambda: client.table("locations").select("id, name").eq("is_active", True).execute())
+                f_sub = executor.submit(lambda: client.table("subcategories").select("id, name, category_id").eq("is_active", True).execute())
+                try:
+                    cat_res = f_cat.result()
+                    categories = cat_res.data or []
+                except Exception:
+                    categories = []
+                try:
+                    loc_res = f_loc.result()
+                    locations = loc_res.data or []
+                except Exception:
+                    locations = []
+                try:
+                    sub_res = f_sub.result()
+                    all_subs = sub_res.data or []
+                except Exception:
+                    all_subs = []
 
             if not categories:
                 categories = [{"id": name.lower().replace(" ", "_"), "name": name} for name in PRACTICAL_SUBCATEGORIES.keys()]
-
-            # 2. Locations
-            try:
-                loc_res = client.table("locations").select("id, name").eq("is_active", True).execute()
-                locations = loc_res.data or []
-            except Exception:
-                locations = []
-
-            # 3. Subcategories from DB (active only)
-            try:
-                sub_res = client.table("subcategories").select("id, name, category_id").eq("is_active", True).execute()
-                all_subs = sub_res.data or []
-            except Exception:
-                all_subs = []
 
             cat_id_to_name = {str(c["id"]): c["name"] for c in categories}
             cat_name_to_id = {c["name"].strip().lower(): str(c["id"]) for c in categories}
@@ -356,17 +372,55 @@ class CacheService:
                     exp, cnt = cls._unread_count_cache[k]
                     cls._unread_count_cache[k] = (exp, max(0, cnt + delta))
 
+    # -------------------------------------------------------------------------
+    # ISSUE GROUPS CACHE
+    # -------------------------------------------------------------------------
+    @classmethod
+    def get_cached_issue_groups(cls, dept_id: Optional[str], role: Optional[str], is_hostel: Optional[bool]) -> Optional[List[Dict[str, Any]]]:
+        key = (dept_id, role, is_hostel)
+        now = time.time()
+        with cls._lock:
+            entry = cls._issue_groups_cache.get(key)
+            if entry and now < entry[0]:
+                return entry[1]
+        return None
+
+    @classmethod
+    def set_cached_issue_groups(cls, dept_id: Optional[str], role: Optional[str], is_hostel: Optional[bool], groups: List[Dict[str, Any]], ttl_seconds: int = 30):
+        key = (dept_id, role, is_hostel)
+        now = time.time()
+        with cls._lock:
+            cls._issue_groups_cache[key] = (now + ttl_seconds, groups)
+
+    @classmethod
+    def invalidate_issue_groups(cls):
+        with cls._lock:
+            cls._issue_groups_cache.clear()
+
+    @classmethod
+    def prewarm_reference_cache(cls):
+        """Asynchronously pre-warms departments and categories reference cache."""
+        import threading
+        def _warm():
+            try:
+                cls.get_departments()
+                cls.get_categories_and_subcategories()
+            except Exception:
+                pass
+        threading.Thread(target=_warm, daemon=True).start()
+
     @classmethod
     def clear_all(cls):
         with cls._lock:
-            cls._departments = None
-            cls._departments_by_code = None
-            cls._departments_by_id = None
-            cls._special_dept_ids.clear()
+            cls._departments = list(cls.DEFAULT_DEPARTMENTS)
+            cls._departments_by_code = {d["code"].strip().upper(): d for d in cls.DEFAULT_DEPARTMENTS}
+            cls._departments_by_id = {str(d["id"]): d for d in cls.DEFAULT_DEPARTMENTS}
+            cls._special_dept_ids = {d["code"].strip().upper(): str(d["id"]) for d in cls.DEFAULT_DEPARTMENTS}
             cls._categories = None
             cls._locations = None
             cls._subcategories_by_cat = None
             cls._security_codes_cache.clear()
+            cls._issue_groups_cache.clear()
             cls._signed_urls.clear()
             cls._metrics_cache.clear()
             cls._dept_breakdown_cache = None
