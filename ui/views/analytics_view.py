@@ -120,13 +120,145 @@ class AnalyticsView:
             visible=is_mobile
         )
 
+        # Department-Scoped Student Feedback Reviews Section
+        from services.feedback_service import FeedbackService
+        feedbacks = FeedbackService.get_feedback_for_scope(self.role, self.department_id)
+
+        feedback_cards = []
+        for fb in feedbacks:
+            cid = fb.get("complaint_id")
+            comp = fb.get("complaints") or {}
+            c_title = comp.get("title") or "—"
+            cat_obj = comp.get("categories")
+            cat_name = cat_obj.get("name") if isinstance(cat_obj, dict) else ""
+            dept_obj = comp.get("departments")
+            dept_name = dept_obj.get("name") if isinstance(dept_obj, dict) else ""
+            r = fb.get("rating", 5)
+            c_comm = fb.get("comment") or "No written feedback provided."
+            fb_date = (fb.get("created_at") or "")[:10] or "—"
+            res_date = (comp.get("resolved_at") or "")[:10] or "—"
+            remarks = comp.get("resolution_remarks") or ""
+            stars = "★" * r + "☆" * (5 - r)
+
+            feedback_cards.append(
+                ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    ft.Text(f"#{cid} — {c_title[:50]}", size=14, weight=ft.FontWeight.BOLD, color=colors["text"], expand=True),
+                                    ft.Container(
+                                        content=ft.Text(f"{stars} ({r}/5)", size=12, weight=ft.FontWeight.BOLD, color="#f59e0b"),
+                                        bgcolor=ft.Colors.with_opacity(0.12, "#f59e0b"),
+                                        border_radius=12,
+                                        padding=ft.padding.symmetric(horizontal=8, vertical=3)
+                                    )
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                wrap=True
+                            ),
+                            ft.Row(
+                                controls=[
+                                    ft.Text(cat_name, size=11, color=colors["text_muted"]) if cat_name else ft.Container(),
+                                    ft.Text(" · " if cat_name else "", size=11, color=colors["text_muted"]) if cat_name else ft.Container(),
+                                    ft.Text(dept_name, size=11, color=colors["text_muted"]) if dept_name else ft.Container(),
+                                    ft.Text(" · " if dept_name else "", size=11, color=colors["text_muted"]) if dept_name else ft.Container(),
+                                    ft.Text(f"Feedback: {fb_date}", size=11, color=colors["text_muted"]),
+                                    ft.Text(f" · Resolved: {res_date}", size=11, color=colors["text_muted"]) if res_date != "—" else ft.Container()
+                                ],
+                                spacing=0,
+                                wrap=True
+                            ),
+                            ft.Container(
+                                content=ft.Column(
+                                    controls=[
+                                        ft.Text("Student Feedback:", size=11, weight=ft.FontWeight.W_600, color=colors["text_muted"]),
+                                        ft.Text(f'"{c_comm}"', size=12, color=colors["text"], italic=True)
+                                    ],
+                                    spacing=2
+                                ),
+                                bgcolor=colors.get("surface_variant", "#f8fafc"),
+                                padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                                border_radius=8
+                            ),
+                            ft.Row(
+                                controls=[
+                                    ft.Text("Resolution Note:", size=11, weight=ft.FontWeight.W_600, color=colors["text_muted"]),
+                                    ft.Text(remarks, size=11, color=colors["text_muted"], expand=True)
+                                ],
+                                spacing=4
+                            ) if remarks else ft.Container()
+                        ],
+                        spacing=6
+                    ),
+                    bgcolor=colors["surface"],
+                    border=ft.Border.all(1, colors["border"]),
+                    border_radius=10,
+                    shadow=get_card_shadow(is_dark),
+                    padding=12,
+                    margin=ft.margin.only(bottom=8)
+                )
+            )
+
+        if not feedback_cards:
+            feedback_cards.append(
+                ft.Container(
+                    content=ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.RATE_REVIEW_OUTLINED, size=24, color=colors["text_muted"]),
+                            ft.Text("No student feedback submitted yet for your department.", size=13, color=colors["text_muted"], italic=True)
+                        ],
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        spacing=8
+                    ),
+                    padding=ft.padding.symmetric(vertical=20, horizontal=16),
+                    alignment=ft.Alignment(0, 0)
+                )
+            )
+
+        feedback_section = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Column(
+                                controls=[
+                                    ft.Text("Department Resolution Feedback", size=18, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                                    ft.Text("Student ratings and comments on resolved complaints belonging to your department.", size=12, color=colors["text_muted"])
+                                ],
+                                spacing=2
+                            ),
+                            ft.Container(
+                                content=ft.Text(f"{len(feedbacks)} Reviews", size=11, weight=ft.FontWeight.BOLD, color=colors["primary"]),
+                                bgcolor=ft.Colors.with_opacity(0.12, colors["primary"]),
+                                border_radius=12,
+                                padding=ft.padding.symmetric(horizontal=10, vertical=4)
+                            )
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True
+                    ),
+                    ft.Divider(color=colors["border"]),
+                    ft.Column(controls=feedback_cards, spacing=6)
+                ],
+                spacing=8
+            ),
+            bgcolor=colors["surface"],
+            border=ft.Border.all(1, colors["border"]),
+            border_radius=12,
+            shadow=get_card_shadow(is_dark),
+            padding=16,
+            margin=ft.margin.only(top=8)
+        )
+
         return ft.Column(
             controls=[
                 ft.Text("Academic Department Performance Comparison", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
                 ft.Text("Real-time comparative resolution metrics across CSE, AIDS, E&TC, MECH, and Civil departments.", size=13, color=colors["text_muted"]),
                 ft.Divider(color=colors["border"]),
                 scrollable_table,
-                mobile_cards_col
+                mobile_cards_col,
+                feedback_section
             ],
             scroll=ft.ScrollMode.AUTO,
             spacing=16,

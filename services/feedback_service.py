@@ -102,10 +102,31 @@ class FeedbackService:
                 "updated_at": datetime.now().isoformat()
             }).eq("id", fb["id"]).execute()
 
+            from services.cache_service import CacheService
+            CacheService.invalidate_metrics()
             return True, "Feedback updated successfully (no further edits allowed)."
 
         except Exception as e:
             return False, f"Update failed: {str(e)}"
+
+    @classmethod
+    def get_feedback_for_complaint(cls, complaint_id: int) -> List[Dict[str, Any]]:
+        """
+        Retrieves feedback submitted for a specific complaint.
+        Does NOT expose student personal identity, roll number, or credentials.
+        """
+        client = get_trusted_backend_client()
+        try:
+            res = (
+                client.table("feedback")
+                .select("id, complaint_id, rating, comment, edit_count, created_at, updated_at")
+                .eq("complaint_id", complaint_id)
+                .order("created_at", desc=True)
+                .execute()
+            )
+            return res.data or []
+        except Exception:
+            return []
 
     @classmethod
     def get_feedback_for_scope(
@@ -116,71 +137,87 @@ class FeedbackService:
     ) -> List[Dict[str, Any]]:
         """
         Retrieves feedback according to department-wise visibility rules:
-        - CSE student/staff sees CSE feedback.
-        - AIDS sees AIDS feedback, etc.
-        - Hostel feedback is visible to approved hostel students, hostel staff, and Principal.
+        - Coordinator & HOD: feedback for resolved complaints in their department.
+        - Hostel Incharge: feedback for hostel complaints.
+        - General HOD: feedback for first-year / general complaints.
+        - Library Incharge: feedback for library complaints.
+        - Principal: all campus-wide feedback.
+        - Does NOT expose student personal identity, credentials, or anonymous ownership.
         """
-        client = get_supabase_client()
-        query = client.table("feedback").select(
-            "id, complaint_id, rating, comment, edit_count, created_at, complaints(title, department_id, is_hostel, departments(name, code))"
-        ).order("created_at", desc=True)
+        client = get_trusted_backend_client()
+        try:
+            query = client.table("feedback").select(
+                "id, complaint_id, rating, comment, edit_count, created_at, updated_at, "
+                "complaints(complaint_id, title, department_id, is_hostel, resolved_at, "
+                "departments(name, code), categories(name))"
+            ).order("created_at", desc=True)
 
-        res = query.execute()
-        raw = res.data or []
+            res = query.execute()
+            raw = res.data or []
 
-        filtered = []
-        for item in raw:
-            comp = item.get("complaints") or {}
-            c_dept = comp.get("department_id")
-            c_is_hostel = comp.get("is_hostel", False)
+            filtered = []
+            for item in raw:
+                comp = item.get("complaints") or {}
+                c_dept = str(comp.get("department_id") or "")
+                c_is_hostel = comp.get("is_hostel", False)
 
-            if role == UserRole.PRINCIPAL.value:
-                filtered.append(item)
-            elif role == UserRole.HOSTEL_INCHARGE.value:
-                if c_is_hostel:
+                if role == UserRole.PRINCIPAL.value:
                     filtered.append(item)
-            elif role in (UserRole.HOD.value, UserRole.COORDINATOR.value):
-                if str(c_dept) == str(department_id) and not c_is_hostel:
-                    filtered.append(item)
-            elif role == UserRole.STUDENT.value:
-                if c_is_hostel:
-                    if is_hostel_student:
+                elif role == UserRole.HOSTEL_INCHARGE.value:
+                    if c_is_hostel:
                         filtered.append(item)
-                elif str(c_dept) == str(department_id):
+                elif role in (UserRole.HOD.value, UserRole.COORDINATOR.value):
+                    if department_id and c_dept == str(department_id) and not c_is_hostel:
+                        filtered.append(item)
+                elif role == UserRole.GENERAL_HOD.value:
+                    if department_id and c_dept == str(department_id) and not c_is_hostel:
+                        filtered.append(item)
+                elif role == UserRole.LIBRARY_INCHARGE.value:
+                    cat_obj = comp.get("categories") or {}
+                    cat_name = (cat_obj.get("name") if isinstance(cat_obj, dict) else "").strip().lower()
+                    if cat_name == "library":
+                        filtered.append(item)
+                elif role == UserRole.STUDENT.value:
                     filtered.append(item)
 
-        return filtered
+            return filtered
+        except Exception as ex:
+            import logging
+            logging.getLogger("complaint_box.feedback").warning(
+                "get_feedback_for_scope error: %s", ex
+            )
+            return []
 
     # =========================================================================
-    # NEW DEPARTMENT-BASED FEEDBACK METHODS (v2)
+    # INSTITUTION-WIDE RESOLVED COMPLAINTS & FEEDBACK (v2)
     # =========================================================================
 
     @classmethod
     def get_resolved_complaints_for_student(
         cls,
-        student_id: str,
-        department_id: Optional[str],
+        student_id: Optional[str] = None,
+        department_id: Optional[str] = None,
         is_hostel_student: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Returns ALL resolved complaints that this student is eligible to give
-        feedback on, based on their department, hostel status, and library rules.
+        Returns ALL resolved complaints across the institution that are eligible
+        for student feedback.
 
-        Business rules:
-        - For academic (non-hostel, non-library) complaints:
-            Show resolved complaints whose department_id matches the student's
-            department_id. The student does NOT need to be the original complainant.
-        - For hostel complaints:
-            Show resolved hostel complaints if the student is an approved
-            hostel resident (is_hostel_approved=True).
-        - Library complaints:
-            Available to all enrolled students across campus.
-        - is_deleted=True complaints are never shown.
+        Requirements:
+        - Shows ALL resolved complaints in the system (institution-wide).
+        - It does NOT matter which student originally submitted the complaint.
+        - Excludes Pending, In Progress, Rejected, and Deleted / soft-deleted complaints.
+        - Privacy: Does NOT expose original complainant's name, roll number,
+          student ID, or anonymous ownership credentials.
+        - 2-Query Pattern (No N+1 queries):
+          1. Query for all resolved, non-deleted complaints.
+          2. If student_id provided, 1 batch query for this student's feedback
+             matching the returned complaint IDs, then merges in memory.
         """
         client = get_trusted_backend_client()
 
         try:
-            # Fetch resolved, non-deleted complaints
+            # Query 1: Fetch all resolved, non-deleted complaints institution-wide
             res = (
                 client.table("complaints")
                 .select(
@@ -188,7 +225,6 @@ class FeedbackService:
                     "is_anonymous, created_at, updated_at, resolved_at, "
                     "department_id, category_id, subcategory_id, location_id, "
                     "location_custom, category_custom, subcategory_custom, "
-                    "resolution_remarks, "
                     "departments(code, name), categories(name), "
                     "subcategories(name), locations(name)"
                 )
@@ -197,30 +233,34 @@ class FeedbackService:
                 .order("resolved_at", desc=True)
                 .execute()
             )
-            raw = res.data or []
+            resolved_complaints = res.data or []
 
-            results = []
-            for item in raw:
-                c_is_hostel = item.get("is_hostel", False)
-                cat_obj = item.get("categories") or {}
-                cat_name = (cat_obj.get("name", "") if isinstance(cat_obj, dict) else "").strip().lower()
-                cat_custom = (item.get("category_custom") or "").strip().lower()
-                is_lib = (cat_name == "library") or (cat_custom == "library")
-                c_dept = str(item.get("department_id", ""))
-
-                if is_lib:
-                    # Library complaints are campus-wide: all students can view & rate
-                    results.append(item)
-                elif c_is_hostel:
-                    # Hostel complaints visible to approved hostel residents
-                    if is_hostel_student:
-                        results.append(item)
+            # Query 2: Batch fetch feedback records for the current student
+            if student_id and resolved_complaints:
+                resolved_ids = [c["complaint_id"] for c in resolved_complaints if c.get("complaint_id")]
+                if resolved_ids:
+                    fb_res = (
+                        client.table("feedback")
+                        .select("id, complaint_id, student_id, rating, comment, edit_count, created_at, updated_at")
+                        .eq("student_id", student_id)
+                        .in_("complaint_id", resolved_ids)
+                        .execute()
+                    )
+                    feedback_map = {row["complaint_id"]: row for row in (fb_res.data or [])}
+                    for comp in resolved_complaints:
+                        cid = comp.get("complaint_id")
+                        comp["student_feedback"] = feedback_map.get(cid)
+                        comp["has_feedback"] = cid in feedback_map
                 else:
-                    # Academic department complaints: match student's department
-                    if department_id and c_dept == str(department_id):
-                        results.append(item)
+                    for comp in resolved_complaints:
+                        comp["student_feedback"] = None
+                        comp["has_feedback"] = False
+            else:
+                for comp in resolved_complaints:
+                    comp["student_feedback"] = None
+                    comp["has_feedback"] = False
 
-            return results
+            return resolved_complaints
 
         except Exception as ex:
             import logging
@@ -271,27 +311,19 @@ class FeedbackService:
     def submit_feedback_v2(
         cls,
         student_id: str,
-        department_id: Optional[str],
-        complaint_id: int,
-        rating: int,
+        department_id: Optional[str] = None,
+        complaint_id: int = 0,
+        rating: int = 5,
         comment: Optional[str] = None
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """
-        Submits feedback without password re-authentication (student is already
-        authenticated via the session).
-
-        Authorization rules enforced here (server-side):
-        1. Rating must be 1-5.
-        2. Complaint must exist, be Resolved, and not deleted.
-        3. The complaint must belong to a department/scope the student is
-           eligible for:
-           - Library: any student is eligible
-           - Hostel: student must have is_hostel_approved == True
-           - Academic: student's department_id must match complaint's department_id
-        4. The student must not have already submitted feedback (UNIQUE constraint).
-
-        Multiple different students from the same eligible department can each
-        submit one feedback record for the same complaint.
+        Submits feedback on a resolved complaint:
+        - Student must exist and account must not be locked.
+        - Complaint must exist, have status 'Resolved', and not be deleted.
+        - Rating must be between 1 and 5 stars.
+        - Exactly ONE feedback per student per complaint: UNIQUE(student_id, complaint_id).
+        - Multiple students can review the same resolved complaint.
+        - Cache is invalidated on successful submission.
         """
         if not (1 <= rating <= 5):
             return False, "Rating must be between 1 and 5 stars.", None
@@ -299,10 +331,10 @@ class FeedbackService:
         client = get_trusted_backend_client()
 
         try:
-            # 1. Fetch student record to verify account status and hostel status
+            # 1. Fetch student record to verify account status
             st_res = (
                 client.table("students")
-                .select("id, department_id, is_hostel_approved, is_locked")
+                .select("id, is_locked")
                 .eq("id", student_id)
                 .execute()
             )
@@ -312,10 +344,10 @@ class FeedbackService:
             if st.get("is_locked"):
                 return False, "Your account is locked. Cannot submit feedback.", None
 
-            # 2. Fetch complaint
+            # 2. Fetch complaint and verify Resolved status
             c_res = (
                 client.table("complaints")
-                .select("complaint_id, status, is_deleted, department_id, is_hostel, categories(name), category_custom")
+                .select("complaint_id, status, is_deleted")
                 .eq("complaint_id", complaint_id)
                 .execute()
             )
@@ -326,28 +358,7 @@ class FeedbackService:
             if c.get("status") != ComplaintStatus.RESOLVED.value or c.get("is_deleted"):
                 return False, "Feedback can only be submitted for Resolved complaints.", None
 
-            # 3. Eligibility check
-            c_dept = str(c.get("department_id", ""))
-            c_is_hostel = c.get("is_hostel", False)
-            cat_obj = c.get("categories") or {}
-            cat_name = (cat_obj.get("name", "") if isinstance(cat_obj, dict) else "").strip().lower()
-            cat_custom = (c.get("category_custom") or "").strip().lower()
-            is_lib = (cat_name == "library") or (cat_custom == "library")
-
-            if is_lib:
-                # Library complaints: campus-wide, all students eligible
-                pass
-            elif c_is_hostel:
-                if not st.get("is_hostel_approved"):
-                    return False, "Only approved hostel residents can give feedback on hostel complaints.", None
-            else:
-                # Academic department: must match the complaint's department
-                if department_id and c_dept != str(department_id):
-                    return False, "You are not eligible to give feedback on complaints from another department.", None
-                if str(st.get("department_id", "")) != c_dept:
-                    return False, "You are not eligible to give feedback on complaints from another department.", None
-
-            # 4. Duplicate check (UNIQUE constraint will also enforce this at DB level)
+            # 3. Duplicate check for this student (UNIQUE constraint also enforces at DB level)
             fb_check = (
                 client.table("feedback")
                 .select("id")
@@ -358,7 +369,7 @@ class FeedbackService:
             if fb_check.data:
                 return False, "You have already submitted feedback for this complaint.", None
 
-            # 5. Insert feedback
+            # 4. Insert feedback
             ins_res = client.table("feedback").insert({
                 "complaint_id": complaint_id,
                 "student_id": student_id,
@@ -366,6 +377,9 @@ class FeedbackService:
                 "comment": comment.strip() if comment else None,
                 "edit_count": 0
             }).execute()
+
+            from services.cache_service import CacheService
+            CacheService.invalidate_metrics()
 
             return True, "Thank you for your feedback!", ins_res.data[0] if ins_res.data else None
 

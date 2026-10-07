@@ -1369,34 +1369,56 @@ class StudentView:
         )
 
     # -------------------------------------------------------------------------
-    # TAB 3: FEEDBACK  (Resolved Complaints → Detail → Rate)
+    # TAB 3: FEEDBACK  (Institution-Wide Resolved Complaints → Detail → Rate)
     # -------------------------------------------------------------------------
     def _render_feedback(self) -> ft.Control:
         """
         Feedback workflow:
-          1. Show ALL resolved complaints for the student's eligible scope
-             (department, approved hostel, campus library).
-          2. Student clicks a complaint ID or 'Give Feedback' / 'View Details'.
-          3. The detail view shows full complaint info + resolution + feedback form.
-          4. Eligibility: any student from the complaint's eligible scope may
-             give feedback once per complaint. Not restricted to the complainant.
-          5. Supports 1 edit if feedback has already been submitted.
+          1. Show ALL resolved complaints in the institution (institution-wide list).
+          2. It does NOT matter which student originally submitted the complaint.
+          3. Only complaints with status = 'Resolved' (non-deleted) are shown.
+          4. Student can submit feedback ONLY ONCE per complaint (student_id, complaint_id).
+          5. If feedback already submitted, card shows 'Feedback Submitted' + submitted rating/comment.
+          6. If feedback not submitted, card shows 'Give Feedback'.
+          7. Single edit rule is preserved.
+          8. Complainant's identity is strictly anonymous/private across all cards and modals.
         """
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        resolved_complaints = FeedbackService.get_resolved_complaints_for_student(
-            student_id=self.student_id,
-            department_id=self.department_id,
-            is_hostel_student=self.student.get("is_hostel_approved", False)
+        # 2-Query pattern: 1 query for all resolved complaints + 1 batch query for student's feedback
+        all_resolved = FeedbackService.get_resolved_complaints_for_student(
+            student_id=self.student_id
         )
 
-        my_feedback_ids = FeedbackService.get_student_feedback_complaint_ids(self.student_id)
+        search_field = ft.TextField(
+            hint_text="Search resolved complaints by ID, title, or department...",
+            prefix_icon=ft.Icons.SEARCH,
+            dense=True,
+            border_radius=8,
+            expand=True
+        )
+
+        filter_status = ft.Dropdown(
+            label="Feedback Status",
+            options=[
+                ft.dropdown.Option("ALL", "All Resolved Complaints"),
+                ft.dropdown.Option("PENDING", "Pending Your Feedback"),
+                ft.dropdown.Option("SUBMITTED", "Feedback Submitted")
+            ],
+            value="ALL",
+            dense=True,
+            width=200
+        )
+
+        show_all_state = [False]
+        complaints_list_container = ft.Column(spacing=10)
 
         def _open_complaint_detail_with_feedback(comp: Dict[str, Any]):
-            """Opens a dialog showing complaint details + feedback form."""
+            """Opens a dialog showing complaint details + feedback form / review."""
             cid = comp.get("complaint_id")
-            already_gave = cid in my_feedback_ids
+            existing_fb = comp.get("student_feedback")
+            already_gave = bool(comp.get("has_feedback"))
 
             def _row(label: str, value: str) -> ft.Control:
                 return ft.Row(
@@ -1416,7 +1438,7 @@ class StudentView:
             dept_obj = comp.get("departments")
             dept_name = dept_obj.get("name") if isinstance(dept_obj, dict) else "—"
             resolved_at = (comp.get("resolved_at") or "")[:10] or "—"
-            remarks = comp.get("resolution_remarks") or "Resolved as per department review."
+            remarks = comp.get("resolution_remarks") or "Resolved as per administrative review."
 
             detail_col = ft.Column(
                 controls=[
@@ -1446,11 +1468,9 @@ class StudentView:
                 spacing=6
             )
 
-            # Feedback section container (mutable so we can switch to edit mode)
             fb_container = ft.Container()
 
-            if already_gave:
-                existing_fb = FeedbackService.get_student_feedback(self.student_id, cid) or {}
+            if already_gave and existing_fb:
                 cur_rating = existing_fb.get("rating", 5)
                 cur_comment = existing_fb.get("comment") or "No comments provided."
                 cur_edits = existing_fb.get("edit_count", 0)
@@ -1553,6 +1573,7 @@ class StudentView:
                         if ok:
                             show_feedback_message(self.page, msg, is_error=False)
                             close_dialog(self.page, detail_dlg)
+                            self.invalidate_tab_cache(3)
                             self._switch_view(3)
                         else:
                             show_feedback_message(self.page, msg, is_error=True)
@@ -1652,8 +1673,8 @@ class StudentView:
 
                     if ok:
                         show_feedback_message(self.page, msg, is_error=False)
-                        my_feedback_ids.add(cid)
                         close_dialog(self.page, detail_dlg)
+                        self.invalidate_tab_cache(3)
                         self._switch_view(3)
                     else:
                         show_feedback_message(self.page, msg, is_error=True)
@@ -1700,128 +1721,243 @@ class StudentView:
             )
             open_dialog(self.page, detail_dlg)
 
-        # --- Build the resolved complaints list ---
-        list_controls: List[ft.Control] = []
-        for comp in resolved_complaints:
-            cid = comp.get("complaint_id")
-            title = comp.get("title") or "—"
-            cat_obj = comp.get("categories")
-            cat_name = cat_obj.get("name") if isinstance(cat_obj, dict) else (comp.get("category_custom") or "—")
-            sub_obj = comp.get("subcategories")
-            sub_name = sub_obj.get("name") if isinstance(sub_obj, dict) else (comp.get("subcategory_custom") or "")
-            dept_obj = comp.get("departments")
-            dept_name = dept_obj.get("name") if isinstance(dept_obj, dict) else "—"
-            resolved_at = (comp.get("resolved_at") or comp.get("updated_at") or "")[:10] or "—"
-            already_gave = cid in my_feedback_ids
-            fb_badge_color = "#059669" if already_gave else "#d97706"
-            fb_badge_text = "Submitted" if already_gave else "Pending"
+        def _refresh_list_view():
+            query = (search_field.value or "").strip().lower()
+            st_filter = filter_status.value or "ALL"
 
-            list_controls.append(
-                ft.Container(
-                    content=ft.Row(
-                        controls=[
-                            # Complaint info with prominent clickable ID
-                            ft.Column(
-                                controls=[
-                                    ft.Row(
-                                        controls=[
-                                            ft.TextButton(
-                                                content=ft.Text(
-                                                    f"#{cid}",
-                                                    size=15, weight=ft.FontWeight.BOLD,
-                                                    color=colors["primary"],
-                                                    decoration=ft.TextDecoration.UNDERLINE
+            filtered = []
+            for comp in all_resolved:
+                cid_str = str(comp.get("complaint_id", ""))
+                title = (comp.get("title") or "").lower()
+                dept_obj = comp.get("departments")
+                dept_name = (dept_obj.get("name") if isinstance(dept_obj, dict) else "").lower()
+                already_gave = bool(comp.get("has_feedback"))
+
+                if query and (query not in cid_str and query not in title and query not in dept_name):
+                    continue
+                if st_filter == "PENDING" and already_gave:
+                    continue
+                if st_filter == "SUBMITTED" and not already_gave:
+                    continue
+                filtered.append(comp)
+
+            # Cap initially rendered cards to 25 for mobile smoothness
+            display_count = len(filtered) if show_all_state[0] else min(25, len(filtered))
+            displayed_items = filtered[:display_count]
+
+            cards: List[ft.Control] = []
+            for comp in displayed_items:
+                cid = comp.get("complaint_id")
+                title = comp.get("title") or "—"
+                cat_obj = comp.get("categories")
+                cat_name = cat_obj.get("name") if isinstance(cat_obj, dict) else (comp.get("category_custom") or "—")
+                sub_obj = comp.get("subcategories")
+                sub_name = sub_obj.get("name") if isinstance(sub_obj, dict) else (comp.get("subcategory_custom") or "")
+                dept_obj = comp.get("departments")
+                dept_name = dept_obj.get("name") if isinstance(dept_obj, dict) else "—"
+                resolved_at = (comp.get("resolved_at") or comp.get("updated_at") or "")[:10] or "—"
+                remarks = comp.get("resolution_remarks") or "Resolution details recorded."
+
+                existing_fb = comp.get("student_feedback")
+                already_gave = bool(comp.get("has_feedback"))
+
+                fb_badge_color = "#059669" if already_gave else "#d97706"
+                fb_badge_text = "Feedback Submitted" if already_gave else "Give Feedback"
+
+                feedback_preview = None
+                if already_gave and existing_fb:
+                    r = existing_fb.get("rating", 5)
+                    c = existing_fb.get("comment") or ""
+                    edits = existing_fb.get("edit_count", 0)
+                    stars = "★" * r + "☆" * (5 - r)
+                    feedback_preview = ft.Container(
+                        content=ft.Column(
+                            controls=[
+                                ft.Row([
+                                    ft.Text("Your Feedback:", size=12, weight=ft.FontWeight.W_600, color=colors["text_muted"]),
+                                    ft.Text(f"{stars} ({r}/5)", size=12, weight=ft.FontWeight.BOLD, color="#f59e0b")
+                                ], spacing=6),
+                                ft.Text(f'"{c}"' if c else "No comment submitted.", size=12, italic=not bool(c), color=colors["text"], max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)
+                            ],
+                            spacing=2
+                        ),
+                        bgcolor=colors.get("surface_variant", "#f8fafc"),
+                        padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                        border_radius=8
+                    )
+
+                cards.append(
+                    ft.Container(
+                        content=ft.Column(
+                            controls=[
+                                # Header row: ID, Title, Badges
+                                ft.Row(
+                                    controls=[
+                                        ft.Row(
+                                            controls=[
+                                                ft.TextButton(
+                                                    content=ft.Text(
+                                                        f"#{cid}",
+                                                        size=15, weight=ft.FontWeight.BOLD,
+                                                        color=colors["primary"],
+                                                        decoration=ft.TextDecoration.UNDERLINE
+                                                    ),
+                                                    on_click=lambda _, c=comp: _open_complaint_detail_with_feedback(c),
+                                                    style=ft.ButtonStyle(
+                                                        padding=ft.padding.all(0),
+                                                        overlay_color=ft.Colors.TRANSPARENT
+                                                    )
                                                 ),
-                                                on_click=lambda _, c=comp: _open_complaint_detail_with_feedback(c),
-                                                style=ft.ButtonStyle(
-                                                    padding=ft.padding.all(0),
-                                                    overlay_color=ft.Colors.TRANSPARENT
+                                                ft.Text(f"  {title[:50]}", size=14, weight=ft.FontWeight.W_600, color=colors["text"], expand=True)
+                                            ],
+                                            spacing=0,
+                                            wrap=True,
+                                            expand=True
+                                        ),
+                                        ft.Row(
+                                            controls=[
+                                                ft.Container(
+                                                    content=ft.Text("✓ Resolved", size=11, weight=ft.FontWeight.BOLD, color="#059669"),
+                                                    bgcolor=ft.Colors.with_opacity(0.12, "#059669"),
+                                                    border_radius=12,
+                                                    padding=ft.padding.symmetric(horizontal=8, vertical=3)
+                                                ),
+                                                ft.Container(
+                                                    content=ft.Text(fb_badge_text, size=11, weight=ft.FontWeight.BOLD, color=fb_badge_color),
+                                                    bgcolor=ft.Colors.with_opacity(0.12, fb_badge_color),
+                                                    border_radius=12,
+                                                    padding=ft.padding.symmetric(horizontal=8, vertical=3)
                                                 )
+                                            ],
+                                            spacing=6
+                                        )
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                    wrap=True
+                                ),
+                                # Metadata: Category, Department, Resolved Date
+                                ft.Row(
+                                    controls=[
+                                        ft.Text(cat_name, size=12, color=colors["text_muted"]),
+                                        ft.Text(" · ", size=12, color=colors["text_muted"]),
+                                        ft.Text(sub_name[:25] if sub_name else "", size=12, color=colors["text_muted"]) if sub_name else ft.Container(),
+                                        ft.Text(" · " if sub_name else "", size=12, color=colors["text_muted"]) if sub_name else ft.Container(),
+                                        ft.Text(dept_name, size=12, color=colors["text_muted"]),
+                                        ft.Text(f" · Resolved {resolved_at}", size=12, color=colors["text_muted"])
+                                    ],
+                                    spacing=0,
+                                    wrap=True
+                                ),
+                                # Resolution Remarks preview
+                                ft.Row(
+                                    controls=[
+                                        ft.Text("Resolution:", size=12, weight=ft.FontWeight.W_600, color=colors["text_muted"]),
+                                        ft.Text(remarks[:120] + ("..." if len(remarks) > 120 else ""), size=12, color=colors["text"], expand=True)
+                                    ],
+                                    spacing=4
+                                ),
+                                # Student Feedback preview if submitted
+                                feedback_preview if feedback_preview else ft.Container(),
+                                # Action button row
+                                ft.Row(
+                                    controls=[
+                                        ft.Text(
+                                            "✓ Feedback submitted (locked)" if already_gave and existing_fb and existing_fb.get("edit_count", 0) >= 1
+                                            else ("Feedback submitted · 1 edit available" if already_gave else "Your feedback helps improve campus services"),
+                                            size=11, color=colors["text_muted"], italic=True, expand=True
+                                        ),
+                                        ft.ElevatedButton(
+                                            content=ft.Text(
+                                                "Give Feedback" if not already_gave
+                                                else ("Edit Feedback" if existing_fb and existing_fb.get("edit_count", 0) == 0 else "View Details")
                                             ),
-                                            ft.Text(
-                                                f"  {title[:50]}",
-                                                size=14, weight=ft.FontWeight.W_500,
-                                                color=colors["text"], expand=True
-                                            )
-                                        ],
-                                        spacing=0,
-                                        wrap=True
-                                    ),
-                                    ft.Row(
-                                        controls=[
-                                            ft.Text(cat_name, size=12, color=colors["text_muted"]),
-                                            ft.Text(" · ", size=12, color=colors["text_muted"]),
-                                            ft.Text(sub_name[:25] if sub_name else "", size=12, color=colors["text_muted"]),
-                                            ft.Text(" · ", size=12, color=colors["text_muted"]),
-                                            ft.Text(dept_name, size=12, color=colors["text_muted"]),
-                                            ft.Text(f" · Resolved {resolved_at}", size=12, color=colors["text_muted"])
-                                        ],
-                                        spacing=0,
-                                        wrap=True
-                                    )
-                                ],
-                                expand=True,
-                                spacing=4
-                            ),
-                            # Feedback status badge & action button
-                            ft.Column(
-                                controls=[
-                                    ft.Container(
-                                        content=ft.Text(
-                                            fb_badge_text, size=11,
-                                            weight=ft.FontWeight.BOLD,
-                                            color=fb_badge_color
-                                        ),
-                                        bgcolor=ft.Colors.with_opacity(0.12, fb_badge_color),
-                                        border_radius=20,
-                                        padding=ft.padding.symmetric(horizontal=10, vertical=4)
-                                    ),
-                                    ft.ElevatedButton(
-                                        content=ft.Text("Give Feedback" if not already_gave else "View Details"),
-                                        icon=ft.Icons.STAR_RATE if not already_gave else ft.Icons.VISIBILITY,
-                                        style=ft.ButtonStyle(
-                                            bgcolor=colors["primary"] if not already_gave else colors.get("surface_variant", "#e2e8f0"),
-                                            color=ft.Colors.WHITE if not already_gave else colors["text"]
-                                        ),
-                                        on_click=lambda _, c=comp: _open_complaint_detail_with_feedback(c)
-                                    )
-                                ],
-                                spacing=4,
-                                horizontal_alignment=ft.CrossAxisAlignment.END
-                            )
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                        wrap=True
-                    ),
-                    bgcolor=colors["surface"],
-                    border=ft.Border.all(1, colors["border"]),
-                    border_radius=12,
-                    shadow=get_card_shadow(is_dark),
-                    padding=16,
-                    margin=ft.margin.only(bottom=10)
+                                            icon=ft.Icons.RATE_REVIEW if not already_gave else (ft.Icons.EDIT if existing_fb and existing_fb.get("edit_count", 0) == 0 else ft.Icons.VISIBILITY),
+                                            style=ft.ButtonStyle(
+                                                bgcolor=colors["primary"] if not already_gave else colors.get("surface_variant", "#e2e8f0"),
+                                                color=ft.Colors.WHITE if not already_gave else colors["text"]
+                                            ),
+                                            on_click=lambda _, c=comp: _open_complaint_detail_with_feedback(c)
+                                        )
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                    wrap=True
+                                )
+                            ],
+                            spacing=8
+                        ),
+                        bgcolor=colors["surface"],
+                        border=ft.Border.all(1, colors["border"]),
+                        border_radius=12,
+                        shadow=get_card_shadow(is_dark),
+                        padding=14,
+                        margin=ft.margin.only(bottom=8)
+                    )
                 )
-            )
 
-        if not list_controls:
-            list_controls.append(
-                ft.Container(
-                    content=ft.Column(
-                        controls=[
-                            ft.Icon(ft.Icons.INBOX_OUTLINED, size=40, color=colors["text_muted"]),
-                            ft.Text(
-                                "No resolved complaints available for feedback in your department or scope.",
-                                size=14, color=colors["text_muted"],
-                                text_align=ft.TextAlign.CENTER
-                            )
-                        ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=10
-                    ),
-                    padding=ft.padding.symmetric(vertical=32, horizontal=24),
-                    alignment=ft.Alignment(0, 0)
+            if not filtered:
+                cards.append(
+                    ft.Container(
+                        content=ft.Column(
+                            controls=[
+                                ft.Icon(ft.Icons.INBOX_OUTLINED, size=40, color=colors["text_muted"]),
+                                ft.Text(
+                                    "No resolved complaints found matching your criteria.",
+                                    size=14, color=colors["text_muted"],
+                                    text_align=ft.TextAlign.CENTER
+                                )
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=10
+                        ),
+                        padding=ft.padding.symmetric(vertical=32, horizontal=24),
+                        alignment=ft.Alignment(0, 0)
+                    )
                 )
-            )
+            elif len(filtered) > display_count and not show_all_state[0]:
+                def _expand_cards(e):
+                    show_all_state[0] = True
+                    _refresh_list_view()
+
+                cards.append(
+                    ft.Container(
+                        content=ft.ElevatedButton(
+                            content=ft.Text(f"Show All Resolved Complaints ({len(filtered)} Total)"),
+                            icon=ft.Icons.EXPAND_MORE,
+                            on_click=_expand_cards,
+                            style=ft.ButtonStyle(
+                                bgcolor=colors.get("surface_variant", "#e2e8f0"),
+                                color=colors["text"]
+                            )
+                        ),
+                        alignment=ft.Alignment(0, 0),
+                        padding=ft.padding.symmetric(vertical=8)
+                    )
+                )
+
+            complaints_list_container.controls = cards
+            try:
+                complaints_list_container.update()
+            except Exception:
+                pass
+
+        # Debounced search & filter listener
+        import threading
+        search_timer = [None]
+
+        def _on_search_change(e):
+            if search_timer[0]:
+                search_timer[0].cancel()
+            def _debounced():
+                _refresh_list_view()
+            search_timer[0] = threading.Timer(0.15, _debounced)
+            search_timer[0].start()
+
+        search_field.on_change = _on_search_change
+        filter_status.on_change = lambda _: _refresh_list_view()
+
+        _refresh_list_view()
 
         return ft.Column(
             controls=[
@@ -1829,10 +1965,10 @@ class StudentView:
                     controls=[
                         ft.Column(
                             controls=[
-                                ft.Text("Resolved Complaints", size=22,
+                                ft.Text("Resolved Complaints & Feedback", size=22,
                                         weight=ft.FontWeight.BOLD, color=colors["text"]),
                                 ft.Text(
-                                    "Click any Complaint ID or 'Give Feedback' to view grievance details and rate resolution quality.",
+                                    "Institution-wide list of resolved grievances. Review resolution outcomes and submit your feedback.",
                                     size=13, color=colors["text_muted"]
                                 )
                             ],
@@ -1841,14 +1977,22 @@ class StudentView:
                         ft.IconButton(
                             icon=ft.Icons.REFRESH,
                             tooltip="Refresh list",
-                            on_click=lambda _: self._switch_view(3)
+                            on_click=lambda _: (self.invalidate_tab_cache(3), self._switch_view(3))
                         )
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     wrap=True
                 ),
+                ft.Row(
+                    controls=[
+                        search_field,
+                        filter_status
+                    ],
+                    spacing=10,
+                    wrap=True
+                ),
                 ft.Divider(color=colors["border"]),
-                ft.Column(controls=list_controls, spacing=0)
+                complaints_list_container
             ],
             scroll=ft.ScrollMode.AUTO,
             spacing=12,

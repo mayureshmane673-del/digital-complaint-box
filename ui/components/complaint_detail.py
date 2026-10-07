@@ -15,6 +15,7 @@ from models.user import UserRole
 from models.complaint import ComplaintStatus, ComplaintPriority
 from services.complaint_service import ComplaintService
 from services.storage_service import StorageService
+from services.feedback_service import FeedbackService
 from database.supabase_client import get_supabase_client
 
 
@@ -35,13 +36,15 @@ def show_complaint_detail_dialog(
     auto_pri = complaint.get("auto_priority", "Low")
     is_anon = complaint.get("is_anonymous", False)
 
-    # Load fresh history and attachments concurrently via trusted backend service
+    # Load fresh history, attachments, and feedback concurrently via trusted backend service
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         f_hist = executor.submit(ComplaintService.get_complaint_history, cid)
         f_att = executor.submit(ComplaintService.get_complaint_attachments, cid)
+        f_fb = executor.submit(FeedbackService.get_feedback_for_complaint, cid) if status == "Resolved" else None
         history_items = f_hist.result()
         attachments = f_att.result()
+        feedback_items = f_fb.result() if f_fb else []
 
     # History timeline widgets
     history_widgets = []
@@ -458,6 +461,37 @@ def show_complaint_detail_dialog(
             )
         )
 
+    # Feedback widgets (for resolved complaints)
+    feedback_widgets = []
+    if status == "Resolved":
+        for fb in feedback_items:
+            r = fb.get("rating", 5)
+            c = fb.get("comment") or "No written comment provided."
+            t_str = format_datetime(fb.get("created_at"))
+            stars = "★" * r + "☆" * (5 - r)
+            feedback_widgets.append(
+                ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            ft.Row([
+                                ft.Text(f"{stars} ({r}/5)", color="#f59e0b", weight=ft.FontWeight.BOLD, size=13),
+                                ft.Text(f"Submitted: {t_str}", size=11, color=colors["text_muted"])
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
+                            ft.Text(c, size=12, color=colors["text"])
+                        ],
+                        spacing=2
+                    ),
+                    bgcolor=colors.get("surface_variant", "#f8fafc"),
+                    padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                    border_radius=8,
+                    margin=ft.margin.only(bottom=4)
+                )
+            )
+        if not feedback_widgets:
+            feedback_widgets.append(
+                ft.Text("No student feedback submitted yet for this resolved complaint.", size=12, italic=True, color=colors["text_muted"])
+            )
+
     # Main modal content
     content_col = ft.Column(
         controls=[
@@ -484,6 +518,9 @@ def show_complaint_detail_dialog(
             ft.Divider(color=colors["border"]),
             ft.Text("Audit Timeline", weight=ft.FontWeight.BOLD, size=13, color=colors["text"]),
             ft.Column(controls=history_widgets, spacing=4),
+            ft.Divider(color=colors["border"]) if status == "Resolved" else ft.Container(),
+            ft.Text(f"Student Feedback ({len(feedback_items)})", weight=ft.FontWeight.BOLD, size=13, color=colors["text"]) if status == "Resolved" else ft.Container(),
+            ft.Column(controls=feedback_widgets, spacing=4) if status == "Resolved" else ft.Container(),
             ft.Divider(color=colors["border"]) if management_controls else ft.Container(),
             ft.Column(controls=management_controls, spacing=8)
         ],
