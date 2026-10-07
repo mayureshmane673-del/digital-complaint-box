@@ -48,6 +48,12 @@ class CacheService:
     # Unread notification count cache: (user_id, role, dept_id) -> (expiry_timestamp, count)
     _unread_count_cache: Dict[Tuple[str, str, Optional[str]], Tuple[float, int]] = {}
 
+    # Roll number pool cache: dept_id -> (expiry_timestamp, list_of_pool_records)
+    _roll_pool_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+
+    # Department student records cache: dept_id -> (expiry_timestamp, dict_of_student_records)
+    _student_records_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+
     # -------------------------------------------------------------------------
     # REFERENCE DATA: DEPARTMENTS
     # -------------------------------------------------------------------------
@@ -397,6 +403,57 @@ class CacheService:
         with cls._lock:
             cls._issue_groups_cache.clear()
 
+    # -------------------------------------------------------------------------
+    # ROLL NUMBER POOL CACHE
+    # -------------------------------------------------------------------------
+    @classmethod
+    def get_cached_roll_pool(cls, dept_id: str) -> Optional[List[Dict[str, Any]]]:
+        if not dept_id:
+            return None
+        now = time.time()
+        with cls._lock:
+            entry = cls._roll_pool_cache.get(str(dept_id))
+            if entry and now < entry[0]:
+                return entry[1]
+        return None
+
+    @classmethod
+    def set_cached_roll_pool(cls, dept_id: str, pool: List[Dict[str, Any]], ttl_seconds: int = 120):
+        if not dept_id:
+            return
+        now = time.time()
+        with cls._lock:
+            cls._roll_pool_cache[str(dept_id)] = (now + ttl_seconds, pool)
+
+    @classmethod
+    def get_cached_student_records(cls, dept_id: str) -> Optional[Dict[str, Any]]:
+        if not dept_id:
+            return None
+        now = time.time()
+        with cls._lock:
+            entry = cls._student_records_cache.get(str(dept_id))
+            if entry and now < entry[0]:
+                return entry[1]
+        return None
+
+    @classmethod
+    def set_cached_student_records(cls, dept_id: str, records: Dict[str, Any], ttl_seconds: int = 120):
+        if not dept_id:
+            return
+        now = time.time()
+        with cls._lock:
+            cls._student_records_cache[str(dept_id)] = (now + ttl_seconds, records)
+
+    @classmethod
+    def invalidate_roll_pool(cls, dept_id: Optional[str] = None):
+        with cls._lock:
+            if dept_id:
+                cls._roll_pool_cache.pop(str(dept_id), None)
+                cls._student_records_cache.pop(str(dept_id), None)
+            else:
+                cls._roll_pool_cache.clear()
+                cls._student_records_cache.clear()
+
     @classmethod
     def prewarm_reference_cache(cls):
         """Asynchronously pre-warms departments and categories reference cache."""
@@ -425,3 +482,5 @@ class CacheService:
             cls._metrics_cache.clear()
             cls._dept_breakdown_cache = None
             cls._unread_count_cache.clear()
+            cls._roll_pool_cache.clear()
+            cls._student_records_cache.clear()

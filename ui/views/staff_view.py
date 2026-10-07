@@ -12,6 +12,7 @@ from services.hostel_service import HostelService
 from services.roll_number_service import RollNumberService
 from services.security_code_service import SecurityCodeService
 from services.analytics_service import AnalyticsService
+from services.cache_service import CacheService
 from database.supabase_client import get_supabase_client
 from ui.theme import (
     COLOR_PRIMARY, COLOR_SURFACE, COLOR_BORDER, COLOR_TEXT_PRIMARY,
@@ -53,6 +54,14 @@ class StaffView:
         self.categories = []
         self.subcategories_by_cat = {}
         self.active_container = ft.Container(expand=True)
+        self._tab_cache: Dict[int, ft.Control] = {}
+        self._dashboard_loading = False
+
+    def invalidate_tab_cache(self, index: Optional[int] = None):
+        if index is None:
+            self._tab_cache.clear()
+        else:
+            self._tab_cache.pop(index, None)
 
     def _ensure_categories_loaded(self):
         if not self.categories:
@@ -65,6 +74,15 @@ class StaffView:
 
     def _switch_view(self, index: int):
         self.selected_tab_index = index
+
+        # Fast-path: Instant tab switching from cached controls
+        if index in self._tab_cache:
+            self.active_container.content = self._tab_cache[index]
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
 
         if self.role == UserRole.COORDINATOR.value:
             views = [self._render_dashboard, self._render_complaints_list, self._render_issue_groups, self._render_roll_number_pool, self._render_analytics, self._render_account_management]
@@ -82,8 +100,13 @@ class StaffView:
             views = [self._render_dashboard, self._render_account_management]
 
         target_func = views[index] if index < len(views) else self._render_dashboard
-        self.active_container.content = target_func()
-        self.page.update()
+        view_content = target_func()
+        self._tab_cache[index] = view_content
+        self.active_container.content = view_content
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     def _render_account_management(self) -> ft.Control:
         from ui.views.account_view import AccountView
@@ -94,6 +117,35 @@ class StaffView:
             on_refresh=lambda: self._switch_view(self.selected_tab_index)
         ).render()
 
+    def _trigger_progressive_staff_dashboard_load(self):
+        """Asynchronously loads metrics & complaints in background thread and updates staff dashboard in-place."""
+        if getattr(self, "_dashboard_loading", False):
+            return
+        self._dashboard_loading = True
+
+        import threading
+        def _fetch_worker():
+            try:
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    f_m = executor.submit(AnalyticsService.get_dashboard_metrics, self.role, self.department_id)
+                    f_c = executor.submit(ComplaintService.get_complaints_for_user, self.role, self.staff_id, self.department_id)
+                    self.cached_metrics = f_m.result()
+                    self.cached_complaints = f_c.result() or []
+            except Exception as e:
+                pass
+            finally:
+                self._dashboard_loading = False
+                if self.selected_tab_index == 0:
+                    self.invalidate_tab_cache(0)
+                    self.active_container.content = self._render_dashboard()
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_fetch_worker, daemon=True).start()
+
     # -------------------------------------------------------------------------
     # TAB: DASHBOARD
     # -------------------------------------------------------------------------
@@ -101,17 +153,21 @@ class StaffView:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        if self.cached_metrics is None or self.cached_complaints is None:
-            from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                f_m = executor.submit(AnalyticsService.get_dashboard_metrics, self.role, self.department_id) if self.cached_metrics is None else None
-                f_c = executor.submit(ComplaintService.get_complaints_for_user, self.role, self.staff_id, self.department_id) if self.cached_complaints is None else None
-                if f_m:
-                    self.cached_metrics = f_m.result()
-                if f_c:
-                    self.cached_complaints = f_c.result()
+        # Check CacheService first for pre-existing metrics
+        if self.cached_metrics is None:
+            cached_m = CacheService.get_cached_metrics(self.role, self.department_id)
+            if cached_m:
+                self.cached_metrics = cached_m
 
-        metrics = self.cached_metrics
+        # If data is not yet available, trigger non-blocking background load and use skeleton/fallbacks
+        if self.cached_metrics is None or self.cached_complaints is None:
+            self._trigger_progressive_staff_dashboard_load()
+
+        metrics = self.cached_metrics or {
+            "total": 0, "pending": 0, "in_progress": 0, "resolved": 0,
+            "rejected": 0, "deleted": 0, "urgent_high": 0,
+            "avg_resolution_hours": 0.0, "satisfaction_rate": 0.0, "total_feedback": 0
+        }
 
         stat_cards = [
             create_stat_card("Total Active", str(metrics["total"]), ft.Icons.FOLDER, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
@@ -123,7 +179,7 @@ class StaffView:
         ]
 
         # Complaints in scope
-        complaints = self.cached_complaints
+        complaints = self.cached_complaints or []
         recent_cards = [create_complaint_card(c, self._open_detail_dialog, is_staff=True) for c in complaints[:5]]
 
         if not recent_cards:
@@ -415,7 +471,16 @@ class StaffView:
             complaints_container.controls = cards
             self.page.update()
 
-        search_field.on_change = lambda _: refresh_list(force_reload=False)
+        complaints_search_timer = [None]
+        def on_complaints_search(e):
+            if complaints_search_timer[0]:
+                complaints_search_timer[0].cancel()
+            import threading
+            complaints_search_timer[0] = threading.Timer(0.15, lambda: refresh_list(force_reload=False))
+            complaints_search_timer[0].daemon = True
+            complaints_search_timer[0].start()
+
+        search_field.on_change = on_complaints_search
         status_filter.on_select = lambda _: refresh_list(force_reload=False)
         status_filter.on_change = lambda _: refresh_list(force_reload=False)
         priority_filter.on_select = lambda _: refresh_list(force_reload=False)
@@ -576,22 +641,20 @@ class StaffView:
 
         from concurrent.futures import ThreadPoolExecutor
         from database.supabase_client import get_trusted_backend_client
+        from services.cache_service import CacheService
+        import threading
 
-        def fetch_pool():
-            return RollNumberService.get_department_pool(self.department_id)
+        # Data holders
+        pool_holder = [[]]
+        student_records_holder = [{}]
 
-        def fetch_students():
-            return get_trusted_backend_client().table("students").select("id, roll_number, full_name, year").eq("department_id", self.department_id).execute()
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            f_p = executor.submit(fetch_pool)
-            f_s = executor.submit(fetch_students)
-            pool = f_p.result()
-            try:
-                st_res = f_s.result()
-                student_records = {s["roll_number"].strip().upper(): s for s in (st_res.data or []) if s.get("roll_number")}
-            except Exception:
-                student_records = {}
+        # Check in-memory cache first for instantaneous rendering
+        cached_pool = CacheService.get_cached_roll_pool(self.department_id)
+        cached_students = CacheService.get_cached_student_records(self.department_id)
+        if cached_pool is not None:
+            pool_holder[0] = cached_pool
+        if cached_students is not None:
+            student_records_holder[0] = cached_students
 
         def get_academic_year_info(roll_no: str, st_info: Optional[Dict[str, Any]] = None):
             st_year = (st_info.get("year") or "").strip().upper() if st_info else ""
@@ -626,7 +689,10 @@ class StaffView:
         def add_single(e):
             add_btn.disabled = True
             add_btn.content = ft.Text("Adding...")
-            self.page.update()
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
             ok, msg = RollNumberService.add_single_roll_number(
                 coordinator_role=self.role,
@@ -641,10 +707,13 @@ class StaffView:
             if ok:
                 show_feedback_message(self.page, msg, is_error=False)
                 single_roll_field.value = ""
-                self._switch_view(3)
+                trigger_load(force=True)
             else:
                 show_feedback_message(self.page, msg, is_error=True)
-                self.page.update()
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
 
         add_btn.on_click = add_single
 
@@ -759,7 +828,7 @@ class StaffView:
             dense=True
         )
 
-        count_text = ft.Text(f"Authorized Roll Numbers (Total: {len(pool)})", size=16, weight=ft.FontWeight.BOLD, color=colors["text"])
+        count_text = ft.Text("Authorized Roll Numbers", size=16, weight=ft.FontWeight.BOLD, color=colors["text"])
         data_table = ft.DataTable(
             columns=[
                 ft.DataColumn(ft.Text("Roll Number", color=colors["text"], weight=ft.FontWeight.BOLD)),
@@ -772,7 +841,23 @@ class StaffView:
             rows=[]
         )
 
+        is_mobile_initial = (getattr(self.page, "width", None) or 1200) < 768
+
+        scrollable_table = ft.Row(
+            controls=[data_table],
+            scroll=ft.ScrollMode.AUTO,
+            visible=not is_mobile_initial
+        )
+        mobile_cards_column = ft.Column(
+            controls=[],
+            spacing=8,
+            visible=is_mobile_initial
+        )
+
         def refresh_table(e=None):
+            pool = pool_holder[0]
+            student_records = student_records_holder[0]
+
             y_val = (year_filter.value or "ALL").strip()
             s_val = (sort_filter.value or "ROLL_ASC").strip()
             q_val = (search_filter.value or "").strip().lower()
@@ -819,168 +904,294 @@ class StaffView:
             elif s_val == "DATE_DESC":
                 filtered.sort(key=lambda x: x["created_at"], reverse=True)
 
-            # Build rows and mobile cards
-            new_rows = []
-            new_cards = []
-            for item in filtered:
-                reg = item["is_reg"]
-                st_display = item["st_name"] if item["st_name"] else ("—" if not reg else "Registered")
+            is_mobile = (getattr(self.page, "width", None) or 1200) < 768
 
-                # Action cell & mobile action button
-                card_actions = None
-                if reg and item.get("st_info") and item["st_info"].get("id"):
-                    if item["y_key"] == "FE":
-                        action_cell = ft.Text("FE (General Dept)", size=11, color=colors["text_muted"], italic=True)
-                        card_actions = ft.Text("FE (General Dept)", size=12, color=colors["text_muted"], italic=True)
+            if not is_mobile:
+                # Desktop: build ONLY DataRows to avoid mobile widget memory overhead
+                new_rows = []
+                for item in filtered:
+                    reg = item["is_reg"]
+                    st_display = item["st_name"] if item["st_name"] else ("—" if not reg else "Registered")
+                    if reg and item.get("st_info") and item["st_info"].get("id"):
+                        if item["y_key"] == "FE":
+                            action_cell = ft.Text("FE (General Dept)", size=11, color=colors["text_muted"], italic=True)
+                        else:
+                            action_cell = ft.ElevatedButton(
+                                content=ft.Text("Reset PW", size=11),
+                                icon=ft.Icons.LOCK_RESET,
+                                style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=8, vertical=2)),
+                                on_click=make_reset_handler(item["st_info"]["id"], item["roll"], item["st_name"])
+                            )
                     else:
-                        action_cell = ft.ElevatedButton(
-                            content=ft.Text("Reset PW", size=11),
-                            icon=ft.Icons.LOCK_RESET,
-                            style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=8, vertical=2)),
-                            on_click=make_reset_handler(item["st_info"]["id"], item["roll"], item["st_name"])
-                        )
-                        card_actions = ft.ElevatedButton(
-                            content=ft.Row([ft.Icon(ft.Icons.LOCK_RESET, size=15), ft.Text("Reset Password", size=12)], spacing=4),
-                            style=ft.ButtonStyle(
-                                bgcolor=colors["primary"],
-                                color=ft.Colors.WHITE,
-                                padding=ft.padding.symmetric(horizontal=12, vertical=8),
-                                shape=ft.RoundedRectangleBorder(radius=8)
-                            ),
-                            on_click=make_reset_handler(item["st_info"]["id"], item["roll"], item["st_name"])
-                        )
-                else:
-                    action_cell = ft.Text("—", color=colors["text_muted"])
+                        action_cell = ft.Text("—", color=colors["text_muted"])
 
-                new_rows.append(
-                    ft.DataRow(
-                        cells=[
-                            ft.DataCell(ft.Text(item["roll"], weight=ft.FontWeight.BOLD, color=colors["text"])),
-                            ft.DataCell(
-                                ft.Container(
-                                    content=ft.Text(item["y_lbl"], size=11, weight=ft.FontWeight.W_600, color=item["y_color"]),
-                                    bgcolor=item["y_bg"],
-                                    border_radius=20,
-                                    padding=ft.padding.symmetric(horizontal=8, vertical=3)
-                                ) if item["y_key"] != "NOT_REGISTERED" else ft.Text("—", size=13, color=colors["text_muted"])
+                    new_rows.append(
+                        ft.DataRow(
+                            cells=[
+                                ft.DataCell(ft.Text(item["roll"], weight=ft.FontWeight.BOLD, color=colors["text"])),
+                                ft.DataCell(
+                                    ft.Container(
+                                        content=ft.Text(item["y_lbl"], size=11, weight=ft.FontWeight.W_600, color=item["y_color"]),
+                                        bgcolor=item["y_bg"],
+                                        border_radius=20,
+                                        padding=ft.padding.symmetric(horizontal=8, vertical=3)
+                                    ) if item["y_key"] != "NOT_REGISTERED" else ft.Text("—", size=13, color=colors["text_muted"])
+                                ),
+                                ft.DataCell(ft.Text(st_display, size=12, color=colors["text"] if item["st_name"] else colors["text_muted"])),
+                                ft.DataCell(
+                                    ft.Container(
+                                        content=ft.Text("Registered" if reg else "Available", size=11, weight=ft.FontWeight.W_600, color="#059669" if reg else "#d97706"),
+                                        bgcolor="#14532d" if (is_dark and reg) else ("#78350f" if is_dark else ("#dcfce7" if reg else "#fef3c7")),
+                                        border_radius=20,
+                                        padding=ft.padding.symmetric(horizontal=8, vertical=2)
+                                    )
+                                ),
+                                ft.DataCell(ft.Text(format_datetime(item["created_at"]), color=colors["text_muted"])),
+                                ft.DataCell(action_cell)
+                            ]
+                        )
+                    )
+                data_table.rows = new_rows
+                scrollable_table.visible = True
+                mobile_cards_column.visible = False
+            else:
+                # Mobile: build responsive cards; limit to 30 for low-memory devices with "Show all" button
+                limit = 30
+                display_items = filtered[:limit] if len(filtered) > limit else filtered
+                new_cards = []
+                for item in display_items:
+                    reg = item["is_reg"]
+                    st_display = item["st_name"] if item["st_name"] else ("—" if not reg else "Registered")
+                    card_actions = None
+                    if reg and item.get("st_info") and item["st_info"].get("id"):
+                        if item["y_key"] == "FE":
+                            card_actions = ft.Text("FE (General Dept)", size=12, color=colors["text_muted"], italic=True)
+                        else:
+                            card_actions = ft.ElevatedButton(
+                                content=ft.Row([ft.Icon(ft.Icons.LOCK_RESET, size=15), ft.Text("Reset Password", size=12)], spacing=4),
+                                style=ft.ButtonStyle(
+                                    bgcolor=colors["primary"],
+                                    color=ft.Colors.WHITE,
+                                    padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                                    shape=ft.RoundedRectangleBorder(radius=8)
+                                ),
+                                on_click=make_reset_handler(item["st_info"]["id"], item["roll"], item["st_name"])
+                            )
+
+                    new_cards.append(
+                        ft.Container(
+                            content=ft.Column(
+                                controls=[
+                                    ft.Row(
+                                        controls=[
+                                            ft.Text(item["roll"], size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                                            ft.Container(
+                                                content=ft.Text("Registered" if reg else "Available", size=11, weight=ft.FontWeight.BOLD, color="#059669" if reg else "#d97706"),
+                                                bgcolor="#14532d" if (is_dark and reg) else ("#78350f" if is_dark else ("#dcfce7" if reg else "#fef3c7")),
+                                                border_radius=20,
+                                                padding=ft.padding.symmetric(horizontal=10, vertical=3)
+                                            )
+                                        ],
+                                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                                    ),
+                                    ft.Row(
+                                        controls=[
+                                            ft.Text("Student:", size=12, color=colors["text_muted"], width=70),
+                                            ft.Text(st_display, size=13, weight=ft.FontWeight.W_500, color=colors["text"] if item["st_name"] else colors["text_muted"], expand=True)
+                                        ],
+                                        spacing=4
+                                    ),
+                                    ft.Row(
+                                        controls=[
+                                            ft.Text("Year:", size=12, color=colors["text_muted"], width=70),
+                                            ft.Container(
+                                                content=ft.Text(item["y_lbl"], size=11, weight=ft.FontWeight.W_600, color=item["y_color"]),
+                                                bgcolor=item["y_bg"],
+                                                border_radius=20,
+                                                padding=ft.padding.symmetric(horizontal=8, vertical=2)
+                                            ) if item["y_key"] != "NOT_REGISTERED" else ft.Text("—", size=12, color=colors["text_muted"])
+                                        ],
+                                        spacing=4
+                                    ),
+                                    ft.Row(
+                                        controls=[
+                                            ft.Text("Added:", size=12, color=colors["text_muted"], width=70),
+                                            ft.Text(format_datetime(item["created_at"]), size=12, color=colors["text_muted"], expand=True)
+                                        ],
+                                        spacing=4
+                                    ),
+                                    *( [ft.Divider(color=colors["border"], height=4), card_actions] if card_actions else [] )
+                                ],
+                                spacing=6
                             ),
-                            ft.DataCell(ft.Text(st_display, size=12, color=colors["text"] if item["st_name"] else colors["text_muted"])),
-                            ft.DataCell(
+                            bgcolor=colors["surface"],
+                            border=ft.Border.all(1, colors["border"]),
+                            border_radius=12,
+                            shadow=get_card_shadow(is_dark),
+                            padding=14,
+                            margin=ft.margin.only(bottom=8)
+                        )
+                    )
+
+                if len(filtered) > len(display_items):
+                    rem = len(filtered) - len(display_items)
+                    def show_more(e_sm):
+                        more_cards = []
+                        for item in filtered[limit:]:
+                            reg = item["is_reg"]
+                            st_display = item["st_name"] if item["st_name"] else ("—" if not reg else "Registered")
+                            card_actions = None
+                            if reg and item.get("st_info") and item["st_info"].get("id"):
+                                if item["y_key"] == "FE":
+                                    card_actions = ft.Text("FE (General Dept)", size=12, color=colors["text_muted"], italic=True)
+                                else:
+                                    card_actions = ft.ElevatedButton(
+                                        content=ft.Row([ft.Icon(ft.Icons.LOCK_RESET, size=15), ft.Text("Reset Password", size=12)], spacing=4),
+                                        style=ft.ButtonStyle(
+                                            bgcolor=colors["primary"],
+                                            color=ft.Colors.WHITE,
+                                            padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                                            shape=ft.RoundedRectangleBorder(radius=8)
+                                        ),
+                                        on_click=make_reset_handler(item["st_info"]["id"], item["roll"], item["st_name"])
+                                    )
+                            more_cards.append(
                                 ft.Container(
-                                    content=ft.Text("Registered" if reg else "Available", size=11, weight=ft.FontWeight.W_600, color="#059669" if reg else "#d97706"),
-                                    bgcolor="#14532d" if (is_dark and reg) else ("#78350f" if is_dark else ("#dcfce7" if reg else "#fef3c7")),
-                                    border_radius=20,
-                                    padding=ft.padding.symmetric(horizontal=8, vertical=2)
+                                    content=ft.Column(
+                                        controls=[
+                                            ft.Row(
+                                                controls=[
+                                                    ft.Text(item["roll"], size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                                                    ft.Container(
+                                                        content=ft.Text("Registered" if reg else "Available", size=11, weight=ft.FontWeight.BOLD, color="#059669" if reg else "#d97706"),
+                                                        bgcolor="#14532d" if (is_dark and reg) else ("#78350f" if is_dark else ("#dcfce7" if reg else "#fef3c7")),
+                                                        border_radius=20,
+                                                        padding=ft.padding.symmetric(horizontal=10, vertical=3)
+                                                    )
+                                                ],
+                                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                                            ),
+                                            ft.Row(
+                                                controls=[
+                                                    ft.Text("Student:", size=12, color=colors["text_muted"], width=70),
+                                                    ft.Text(st_display, size=13, weight=ft.FontWeight.W_500, color=colors["text"] if item["st_name"] else colors["text_muted"], expand=True)
+                                                ],
+                                                spacing=4
+                                            ),
+                                            ft.Row(
+                                                controls=[
+                                                    ft.Text("Year:", size=12, color=colors["text_muted"], width=70),
+                                                    ft.Container(
+                                                        content=ft.Text(item["y_lbl"], size=11, weight=ft.FontWeight.W_600, color=item["y_color"]),
+                                                        bgcolor=item["y_bg"],
+                                                        border_radius=20,
+                                                        padding=ft.padding.symmetric(horizontal=8, vertical=2)
+                                                    ) if item["y_key"] != "NOT_REGISTERED" else ft.Text("—", size=12, color=colors["text_muted"])
+                                                ],
+                                                spacing=4
+                                            ),
+                                            ft.Row(
+                                                controls=[
+                                                    ft.Text("Added:", size=12, color=colors["text_muted"], width=70),
+                                                    ft.Text(format_datetime(item["created_at"]), size=12, color=colors["text_muted"], expand=True)
+                                                ],
+                                                spacing=4
+                                            ),
+                                            *( [ft.Divider(color=colors["border"], height=4), card_actions] if card_actions else [] )
+                                        ],
+                                        spacing=6
+                                    ),
+                                    bgcolor=colors["surface"],
+                                    border=ft.Border.all(1, colors["border"]),
+                                    border_radius=12,
+                                    shadow=get_card_shadow(is_dark),
+                                    padding=14,
+                                    margin=ft.margin.only(bottom=8)
                                 )
+                            )
+                        mobile_cards_column.controls.pop()
+                        mobile_cards_column.controls.extend(more_cards)
+                        try:
+                            self.page.update()
+                        except Exception:
+                            pass
+
+                    new_cards.append(
+                        ft.Container(
+                            content=ft.ElevatedButton(
+                                f"Show all ({rem} more)",
+                                icon=ft.Icons.EXPAND_MORE,
+                                on_click=show_more
                             ),
-                            ft.DataCell(ft.Text(format_datetime(item["created_at"]), color=colors["text_muted"])),
-                            ft.DataCell(action_cell)
-                        ]
+                            alignment=ft.Alignment.CENTER,
+                            padding=10
+                        )
                     )
-                )
 
-                # Mobile responsive card representation
-                new_cards.append(
-                    ft.Container(
-                        content=ft.Column(
-                            controls=[
-                                ft.Row(
-                                    controls=[
-                                        ft.Text(item["roll"], size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                                        ft.Container(
-                                            content=ft.Text("Registered" if reg else "Available", size=11, weight=ft.FontWeight.BOLD, color="#059669" if reg else "#d97706"),
-                                            bgcolor="#14532d" if (is_dark and reg) else ("#78350f" if is_dark else ("#dcfce7" if reg else "#fef3c7")),
-                                            border_radius=20,
-                                            padding=ft.padding.symmetric(horizontal=10, vertical=3)
-                                        )
-                                    ],
-                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN
-                                ),
-                                ft.Row(
-                                    controls=[
-                                        ft.Text("Student:", size=12, color=colors["text_muted"], width=70),
-                                        ft.Text(st_display, size=13, weight=ft.FontWeight.W_500, color=colors["text"] if item["st_name"] else colors["text_muted"], expand=True)
-                                    ],
-                                    spacing=4
-                                ),
-                                ft.Row(
-                                    controls=[
-                                        ft.Text("Year:", size=12, color=colors["text_muted"], width=70),
-                                        ft.Container(
-                                            content=ft.Text(item["y_lbl"], size=11, weight=ft.FontWeight.W_600, color=item["y_color"]),
-                                            bgcolor=item["y_bg"],
-                                            border_radius=20,
-                                            padding=ft.padding.symmetric(horizontal=8, vertical=2)
-                                        ) if item["y_key"] != "NOT_REGISTERED" else ft.Text("—", size=12, color=colors["text_muted"])
-                                    ],
-                                    spacing=4
-                                ),
-                                ft.Row(
-                                    controls=[
-                                        ft.Text("Added:", size=12, color=colors["text_muted"], width=70),
-                                        ft.Text(format_datetime(item["created_at"]), size=12, color=colors["text_muted"], expand=True)
-                                    ],
-                                    spacing=4
-                                ),
-                                *( [ft.Divider(color=colors["border"], height=4), card_actions] if card_actions else [] )
-                            ],
-                            spacing=6
-                        ),
-                        bgcolor=colors["surface"],
-                        border=ft.Border.all(1, colors["border"]),
-                        border_radius=12,
-                        shadow=get_card_shadow(is_dark),
-                        padding=14,
-                        margin=ft.margin.only(bottom=8)
+                if not new_cards:
+                    new_cards.append(
+                        ft.Container(
+                            content=ft.Text("No roll numbers match the filter criteria.", size=13, color=colors["text_muted"]),
+                            padding=20
+                        )
                     )
-                )
 
-            if not new_cards:
-                new_cards.append(
-                    ft.Container(
-                        content=ft.Text("No roll numbers match the filter criteria.", size=13, color=colors["text_muted"]),
-                        padding=20
-                    )
-                )
+                mobile_cards_column.controls = new_cards
+                scrollable_table.visible = False
+                mobile_cards_column.visible = True
 
-            data_table.rows = new_rows
-            mobile_cards_column.controls = new_cards
             count_text.value = f"Authorized Roll Numbers (Showing {len(filtered)} of {len(pool)})"
-            self.page.update()
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
-        is_mobile = (getattr(self.page, "width", None) or 1200) < 768
-
-        scrollable_table = ft.Row(
-            controls=[data_table],
-            scroll=ft.ScrollMode.AUTO,
-            visible=not is_mobile
-        )
-        mobile_cards_column = ft.Column(
-            controls=[],
-            spacing=8,
-            visible=is_mobile
-        )
+        # Debounced search on typing
+        search_timer = [None]
+        def on_search_debounced(e):
+            if search_timer[0]:
+                search_timer[0].cancel()
+            search_timer[0] = threading.Timer(0.15, refresh_table)
+            search_timer[0].daemon = True
+            search_timer[0].start()
 
         year_filter.on_select = refresh_table
         year_filter.on_change = refresh_table
         sort_filter.on_select = refresh_table
         sort_filter.on_change = refresh_table
-        search_filter.on_change = refresh_table
-
-        refresh_table()
+        search_filter.on_change = on_search_debounced
 
         # -------------------------------------------------------------------------
         # Pool Summary Metrics
         # -------------------------------------------------------------------------
-        total_cnt = len(pool)
-        reg_cnt = sum(1 for r in pool if r.get("is_registered"))
-        avail_cnt = total_cnt - reg_cnt
-        fe_cnt = sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("FE", "FIRST YEAR", "1", "1ST", "1ST YEAR"))
-        se_cnt = sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("SE", "SECOND YEAR", "2", "2ND", "2ND YEAR"))
-        te_cnt = sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("TE", "THIRD YEAR", "3", "3RD", "3RD YEAR"))
-        be_cnt = sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("BE", "FINAL YEAR", "FOURTH YEAR", "4", "4TH", "4TH YEAR"))
+        stat_total_val = ft.Text("0", size=22, weight=ft.FontWeight.BOLD, color=colors["text"])
+        stat_reg_val = ft.Text("0", size=22, weight=ft.FontWeight.BOLD, color=colors["text"])
+        stat_reg_sub = ft.Text("0% activated", size=11, color=colors["text_muted"])
+        stat_avail_val = ft.Text("0", size=22, weight=ft.FontWeight.BOLD, color=colors["text"])
 
-        def _stat_card(title: str, val: str, icon: str, color: str, sub: str = "") -> ft.Container:
+        chip_fe_val = ft.Text("0", size=11, weight=ft.FontWeight.BOLD, color="#2563eb")
+        chip_se_val = ft.Text("0", size=11, weight=ft.FontWeight.BOLD, color="#7c3aed")
+        chip_te_val = ft.Text("0", size=11, weight=ft.FontWeight.BOLD, color="#d97706")
+        chip_be_val = ft.Text("0", size=11, weight=ft.FontWeight.BOLD, color="#059669")
+
+        def update_stat_values():
+            pool = pool_holder[0]
+            student_records = student_records_holder[0]
+            t_cnt = len(pool)
+            r_cnt = sum(1 for r in pool if r.get("is_registered"))
+            a_cnt = t_cnt - r_cnt
+
+            stat_total_val.value = str(t_cnt)
+            stat_reg_val.value = str(r_cnt)
+            stat_reg_sub.value = f"{(r_cnt/t_cnt*100):.1f}% activated" if t_cnt else "0%"
+            stat_avail_val.value = str(a_cnt)
+
+            chip_fe_val.value = str(sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("FE", "FIRST YEAR", "1", "1ST", "1ST YEAR")))
+            chip_se_val.value = str(sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("SE", "SECOND YEAR", "2", "2ND", "2ND YEAR")))
+            chip_te_val.value = str(sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("TE", "THIRD YEAR", "3", "3RD", "3RD YEAR")))
+            chip_be_val.value = str(sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("BE", "FINAL YEAR", "FOURTH YEAR", "4", "4TH", "4TH YEAR")))
+
+        def _stat_card(title: str, val_control: ft.Control, icon: str, color: str, sub_control: Optional[ft.Control] = None) -> ft.Container:
             return ft.Container(
                 content=ft.Column(
                     controls=[
@@ -991,8 +1202,8 @@ class StaffView:
                             ],
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN
                         ),
-                        ft.Text(val, size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                        *( [ft.Text(sub, size=11, color=colors["text_muted"])] if sub else [] )
+                        val_control,
+                        *( [sub_control] if sub_control else [] )
                     ],
                     spacing=4
                 ),
@@ -1003,12 +1214,12 @@ class StaffView:
                 shadow=get_card_shadow(is_dark)
             )
 
-        def _year_chip(lbl: str, count: int, color: str, bg: str) -> ft.Container:
+        def _year_chip(lbl: str, count_ctrl: ft.Control, color: str, bg: str) -> ft.Container:
             return ft.Container(
                 content=ft.Row(
                     controls=[
                         ft.Text(lbl, size=11, weight=ft.FontWeight.BOLD, color=color),
-                        ft.Text(str(count), size=11, weight=ft.FontWeight.BOLD, color=color)
+                        count_ctrl
                     ],
                     spacing=4
                 ),
@@ -1029,10 +1240,10 @@ class StaffView:
                     ),
                     ft.Row(
                         controls=[
-                            _year_chip("FE", fe_cnt, "#2563eb", "#dbeafe" if not is_dark else "#1e3a8a"),
-                            _year_chip("SE", se_cnt, "#7c3aed", "#ede9fe" if not is_dark else "#4c1d95"),
-                            _year_chip("TE", te_cnt, "#d97706", "#fef3c7" if not is_dark else "#78350f"),
-                            _year_chip("BE", be_cnt, "#059669", "#d1fae5" if not is_dark else "#064e3b"),
+                            _year_chip("FE", chip_fe_val, "#2563eb", "#dbeafe" if not is_dark else "#1e3a8a"),
+                            _year_chip("SE", chip_se_val, "#7c3aed", "#ede9fe" if not is_dark else "#4c1d95"),
+                            _year_chip("TE", chip_te_val, "#d97706", "#fef3c7" if not is_dark else "#78350f"),
+                            _year_chip("BE", chip_be_val, "#059669", "#d1fae5" if not is_dark else "#064e3b"),
                         ],
                         wrap=True,
                         spacing=6
@@ -1049,9 +1260,9 @@ class StaffView:
 
         metrics_row = ft.ResponsiveRow(
             controls=[
-                ft.Container(_stat_card("Total Authorized", str(total_cnt), ft.Icons.VERIFIED_USER, "#3b82f6", "In department pool"), col={"xs": 12, "sm": 6, "md": 3}),
-                ft.Container(_stat_card("Registered Students", str(reg_cnt), ft.Icons.HOW_TO_REG, "#10b981", f"{(reg_cnt/total_cnt*100):.1f}% activated" if total_cnt else "0%"), col={"xs": 12, "sm": 6, "md": 3}),
-                ft.Container(_stat_card("Available Slots", str(avail_cnt), ft.Icons.HOURGLASS_EMPTY, "#f59e0b", "Pending registration"), col={"xs": 12, "sm": 6, "md": 3}),
+                ft.Container(_stat_card("Total Authorized", stat_total_val, ft.Icons.VERIFIED_USER, "#3b82f6", ft.Text("In department pool", size=11, color=colors["text_muted"])), col={"xs": 12, "sm": 6, "md": 3}),
+                ft.Container(_stat_card("Registered Students", stat_reg_val, ft.Icons.HOW_TO_REG, "#10b981", stat_reg_sub), col={"xs": 12, "sm": 6, "md": 3}),
+                ft.Container(_stat_card("Available Slots", stat_avail_val, ft.Icons.HOURGLASS_EMPTY, "#f59e0b", ft.Text("Pending registration", size=11, color=colors["text_muted"])), col={"xs": 12, "sm": 6, "md": 3}),
                 ft.Container(year_breakdown_card, col={"xs": 12, "sm": 6, "md": 3}),
             ],
             spacing=12,
@@ -1091,12 +1302,18 @@ class StaffView:
                     _set_import_status(message)
                 else:
                     _set_import_status(message, error=True)
-            self.page.update()
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
         def on_spreadsheet_selected(info):
             selected_import_info[0] = info
             import_btn.disabled = info is None
-            self.page.update()
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
         def on_choose_spreadsheet(e):
             open_spreadsheet_import_picker(
@@ -1110,7 +1327,10 @@ class StaffView:
                 return
             import_btn.disabled = True
             import_btn.text = "Importing..."
-            self.page.update()
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
             info = selected_import_info[0]
             f_bytes = info.get("bytes")
@@ -1176,8 +1396,7 @@ class StaffView:
             import_summary_container.controls = summary_rows
             import_summary_container.visible = True
             show_feedback_message(self.page, summary.get("message", "Import complete"), is_error=not summary.get("success"))
-            self.page.update()
-            self._switch_view(3)
+            trigger_load(force=True)
 
         import_btn.on_click = do_run_import
 
@@ -1251,6 +1470,107 @@ class StaffView:
             shadow=get_card_shadow(is_dark)
         )
 
+        loading_ring = ft.Container(
+            content=ft.Row(
+                controls=[
+                    ft.ProgressRing(width=20, height=20, stroke_width=2),
+                    ft.Text("Loading authorized roll numbers...", size=13, color=colors["text_muted"])
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=12
+            ),
+            padding=20,
+            visible=False
+        )
+
+        error_box = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.ERROR_OUTLINE, size=22, color="#ef4444"),
+                            ft.Text("Failed to load Roll Number Pool. Check your connection.", size=13, color="#ef4444")
+                        ],
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        spacing=8
+                    ),
+                    ft.ElevatedButton("Retry", icon=ft.Icons.REFRESH, on_click=lambda _: trigger_load(force=True))
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=8
+            ),
+            padding=20,
+            visible=False
+        )
+
+        table_area = ft.Column(
+            controls=[
+                count_text,
+                scrollable_table,
+                mobile_cards_column
+            ],
+            spacing=10
+        )
+
+        def trigger_load(force: bool = False):
+            cached_p = None if force else CacheService.get_cached_roll_pool(self.department_id)
+            cached_s = None if force else CacheService.get_cached_student_records(self.department_id)
+
+            if cached_p is not None and cached_s is not None:
+                pool_holder[0] = cached_p
+                student_records_holder[0] = cached_s
+                update_stat_values()
+                refresh_table()
+                loading_ring.visible = False
+                error_box.visible = False
+                table_area.visible = True
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                return
+
+            loading_ring.visible = True
+            error_box.visible = False
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+            def _bg_fetch():
+                try:
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        f_p = executor.submit(lambda: RollNumberService.get_department_pool(self.department_id, force_refresh=force))
+                        f_s = executor.submit(lambda: get_trusted_backend_client().table("students").select("id, roll_number, full_name, year").eq("department_id", self.department_id).execute())
+                        p = f_p.result()
+                        s_res = f_s.result()
+                        st_recs = {s["roll_number"].strip().upper(): s for s in (s_res.data or []) if s.get("roll_number")}
+
+                    CacheService.set_cached_roll_pool(self.department_id, p)
+                    CacheService.set_cached_student_records(self.department_id, st_recs)
+
+                    pool_holder[0] = p
+                    student_records_holder[0] = st_recs
+                    update_stat_values()
+                    refresh_table()
+                    loading_ring.visible = False
+                    error_box.visible = False
+                    table_area.visible = True
+                except Exception as ex:
+                    loading_ring.visible = False
+                    error_box.visible = True
+                    table_area.visible = False
+                finally:
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+
+            threading.Thread(target=_bg_fetch, daemon=True).start()
+
+        # Initial trigger
+        trigger_load(force=False)
+
         return ft.Column(
             controls=[
                 ft.Row(
@@ -1262,17 +1582,27 @@ class StaffView:
                             ],
                             spacing=2
                         ),
-                        ft.ElevatedButton(
-                            content=ft.Text("Import Modal"),
-                            icon=ft.Icons.UPLOAD_FILE,
-                            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
-                            on_click=lambda _: show_excel_importer_dialog(
-                                self.page,
-                                self.role,
-                                self.department_id,
-                                self.staff_id,
-                                on_imported=lambda: self._switch_view(3)
-                            )
+                        ft.Row(
+                            controls=[
+                                ft.IconButton(
+                                    icon=ft.Icons.REFRESH,
+                                    tooltip="Refresh Roll Numbers",
+                                    on_click=lambda _: trigger_load(force=True)
+                                ),
+                                ft.ElevatedButton(
+                                    content=ft.Text("Import Modal"),
+                                    icon=ft.Icons.UPLOAD_FILE,
+                                    style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
+                                    on_click=lambda _: show_excel_importer_dialog(
+                                        self.page,
+                                        self.role,
+                                        self.department_id,
+                                        self.staff_id,
+                                        on_imported=lambda: trigger_load(force=True)
+                                    )
+                                )
+                            ],
+                            spacing=8
                         )
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -1289,9 +1619,9 @@ class StaffView:
                     ],
                     spacing=10
                 ),
-                count_text,
-                scrollable_table,
-                mobile_cards_column
+                loading_ring,
+                error_box,
+                table_area
             ],
             scroll=ft.ScrollMode.AUTO,
             spacing=16

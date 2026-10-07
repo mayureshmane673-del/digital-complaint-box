@@ -74,6 +74,7 @@ class StudentView:
         self.selected_tab_index = initial_tab
         self.cached_complaints = None
         self.active_container = ft.Container(expand=True)
+        self._tab_cache: Dict[int, ft.Control] = {}
         self.categories = []
         self.subcategories_by_cat = {}
         self.locations = []
@@ -86,6 +87,12 @@ class StudentView:
         if not self.categories:
             from services.cache_service import CacheService
             self.categories, self.subcategories_by_cat, self.locations = CacheService.get_categories_and_subcategories()
+
+    def invalidate_tab_cache(self, index: Optional[int] = None):
+        if index is None:
+            self._tab_cache.clear()
+        else:
+            self._tab_cache.pop(index, None)
 
     def render(self) -> ft.Control:
         self._switch_view(self.selected_tab_index)
@@ -107,6 +114,7 @@ class StudentView:
                 )
                 self.cached_complaints = cmps or []
                 self._dashboard_loading = False
+                self.invalidate_tab_cache(0)
                 if self.selected_tab_index == 0:
                     self.active_container.content = self._render_dashboard()
                     try:
@@ -118,6 +126,7 @@ class StudentView:
                 self._dashboard_loading = False
                 if self.cached_complaints is None:
                     self.cached_complaints = []
+                self.invalidate_tab_cache(0)
                 if self.selected_tab_index == 0:
                     self.active_container.content = self._render_dashboard()
                     try:
@@ -140,27 +149,48 @@ class StudentView:
         except Exception:
             pass
         save_active_tab(self.page, index, owner_id=self.student_id)
+
+        # Fast path: instant tab switching from cached controls
+        if index in self._tab_cache:
+            self.active_container.content = self._tab_cache[index]
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+
         if index == 0:
             if self.cached_complaints is None:
                 self._trigger_progressive_dashboard_load()
-            self.active_container.content = self._render_dashboard()
+            content = self._render_dashboard()
         elif index == 1:
-            self.active_container.content = self._render_new_complaint()
+            content = self._render_new_complaint()
         elif index == 2:
-            self.active_container.content = self._render_my_complaints()
+            content = self._render_my_complaints()
         elif index == 3:
-            self.active_container.content = self._render_feedback()
+            content = self._render_feedback()
         elif index == 4:
-            self.active_container.content = self._render_hostel_status()
+            content = self._render_hostel_status()
         elif index == 5:
             from ui.views.account_view import AccountView
-            self.active_container.content = AccountView(
+            content = AccountView(
                 self.page,
                 self.student,
                 UserRole.STUDENT.value,
                 on_refresh=lambda: self._switch_view(self.selected_tab_index)
             ).render()
-        self.page.update()
+        else:
+            content = self._render_dashboard()
+
+        # Cache tab content for instant navigation (dashboard is cached once complaints loaded)
+        if index != 0 or self.cached_complaints is not None:
+            self._tab_cache[index] = content
+
+        self.active_container.content = content
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     # -------------------------------------------------------------------------
     # TAB 0: DASHBOARD
@@ -944,6 +974,7 @@ class StudentView:
                     clear_complaint_draft(self.page)
                     show_feedback_message(self.page, f"Complaint #{cid} registered successfully!", is_error=False)
                     self.cached_complaints = None
+                    self.invalidate_tab_cache()
                     self._switch_view(2)  # Switch to My Complaints
                 else:
                     submit_btn.disabled = False
@@ -1226,6 +1257,7 @@ class StudentView:
                     if ok:
                         show_feedback_message(self.page, msg, is_error=False)
                         self.cached_complaints = None
+                        self.invalidate_tab_cache()
                         refresh_list(force_reload=True)
                     else:
                         show_feedback_message(self.page, msg, is_error=True)
@@ -1271,7 +1303,16 @@ class StudentView:
             update_subcat_options(c_val)
             refresh_list(force_reload=False)
 
-        search_field.on_change = lambda _: refresh_list(force_reload=False)
+        student_search_timer = [None]
+        def on_student_search(e):
+            if student_search_timer[0]:
+                student_search_timer[0].cancel()
+            import threading
+            student_search_timer[0] = threading.Timer(0.15, lambda: refresh_list(force_reload=False))
+            student_search_timer[0].daemon = True
+            student_search_timer[0].start()
+
+        search_field.on_change = on_student_search
         status_filter.on_select = lambda _: refresh_list(force_reload=False)
         status_filter.on_change = lambda _: refresh_list(force_reload=False)
         priority_filter.on_select = lambda _: refresh_list(force_reload=False)

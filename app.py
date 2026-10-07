@@ -244,10 +244,6 @@ def main(page: ft.Page):
                 page.navigation_bar.selected_index = index
             if current_active_view[0]:
                 current_active_view[0]._switch_view(index)
-            try:
-                page.update()
-            except Exception:
-                pass
 
         compact = is_compact_screen()
         content_container = ft.Container(

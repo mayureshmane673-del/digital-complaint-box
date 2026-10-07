@@ -82,6 +82,8 @@ class RollNumberService:
                 "added_by_coordinator_id": staff_record_id,
                 "is_registered": False
             }).execute()
+            from services.cache_service import CacheService
+            CacheService.invalidate_roll_pool(auth_dept_id)
             return True, f"Roll Number '{clean_roll}' added successfully."
         except Exception as e:
             err_str = str(e).lower()
@@ -356,6 +358,10 @@ class RollNumberService:
                         summary["errors"].append(f"Batch insert error: {ex}")
 
             summary["success"] = (summary["added"] > 0 or (summary["total_rows"] > 0 and summary["duplicates"] == summary["total_rows"]))
+            if summary.get("added", 0) > 0:
+                from services.cache_service import CacheService
+                CacheService.invalidate_roll_pool(auth_dept_id)
+
             summary["message"] = (
                 f"Import complete. Total: {summary['total_rows']}, "
                 f"Added: {summary['added']}, Duplicates: {summary['duplicates']}, "
@@ -368,13 +374,27 @@ class RollNumberService:
             return summary
 
     @classmethod
-    def get_department_pool(cls, department_id: str) -> List[Dict[str, Any]]:
-        """Lists roll numbers in a specific department pool."""
+    def get_department_pool(cls, department_id: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """Lists roll numbers in a specific department pool with intelligent caching."""
+        if not department_id:
+            return []
+        from services.cache_service import CacheService
+        if not force_refresh:
+            cached = CacheService.get_cached_roll_pool(department_id)
+            if cached is not None:
+                return cached
         client = _get_client()
         try:
             res = client.table("roll_number_pool").select("*").eq("department_id", department_id).order("created_at", desc=True).execute()
-            return res.data or []
+            pool_data = res.data or []
+            CacheService.set_cached_roll_pool(department_id, pool_data)
+            return pool_data
         except Exception:
+            # Fallback: check if previous cache exists before returning empty
+            with CacheService._lock:
+                entry = CacheService._roll_pool_cache.get(str(department_id))
+                if entry:
+                    return entry[1]
             return []
 
     @classmethod
