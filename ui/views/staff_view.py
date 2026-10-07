@@ -756,8 +756,7 @@ class StaffView:
         search_filter = ft.TextField(
             hint_text="Search roll number or student...",
             prefix_icon=ft.Icons.SEARCH,
-            dense=True,
-            expand=True
+            dense=True
         )
 
         count_text = ft.Text(f"Authorized Roll Numbers (Total: {len(pool)})", size=16, weight=ft.FontWeight.BOLD, color=colors["text"])
@@ -1226,7 +1225,7 @@ class StaffView:
                                             controls=[
                                                 ft.ElevatedButton("Choose File", icon=ft.Icons.FILE_UPLOAD, on_click=on_choose_spreadsheet),
                                                 import_btn,
-                                                ft.Container(content=import_status_text, expand=True)
+                                                import_status_text
                                             ],
                                             spacing=8,
                                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
