@@ -75,7 +75,8 @@ class AuthService:
             return False, pool_err, None
 
         # Password strength check
-        pw_ok, pw_err = validate_password_strength(password)
+        clean_pass = (password or "").strip()
+        pw_ok, pw_err = validate_password_strength(clean_pass)
         if not pw_ok:
             return False, pw_err, None
 
@@ -83,7 +84,7 @@ class AuthService:
             return False, "Security question and answer are required.", None
 
         client = get_trusted_backend_client()
-        pw_hash = hash_password(password)
+        pw_hash = hash_password(clean_pass)
         ans_hash = hash_security_answer(security_answer)
 
         student_data = {
@@ -208,7 +209,8 @@ class AuthService:
             return False, "Account is locked due to 5 failed login attempts. Please use Forgot Password to recover your account.", None
 
         # Verify password
-        if not verify_password(password, student.get("password_hash", "")):
+        clean_pass = password.strip() if password else ""
+        if not verify_password(password, student.get("password_hash", "")) and not verify_password(clean_pass, student.get("password_hash", "")):
             failed = student.get("failed_login_attempts", 0) + 1
             update_fields: Dict[str, Any] = {"failed_login_attempts": failed}
             if failed >= MAX_FAILED_ATTEMPTS:

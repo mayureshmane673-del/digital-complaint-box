@@ -93,8 +93,8 @@ class AuthView:
         # ---------------------------------------------------------------------
         # TAB 1: STUDENT LOGIN CONTROLS
         # ---------------------------------------------------------------------
-        st_login_roll = ft.TextField(label="Roll Number / Student ID", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True)
-        st_login_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True)
+        st_login_roll = ft.TextField(label="Roll Number / Student ID", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True, on_change=lambda e: setattr(st_login_roll, "value", e.control.value))
+        st_login_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(st_login_pass, "value", e.control.value))
         btn_st_login = ft.ElevatedButton(
             content=ft.Row(
                 controls=[
@@ -112,7 +112,7 @@ class AuthView:
                 return
             alert_st_login.hide_alert()
             roll_val = (st_login_roll.value or "").strip()
-            pass_val = st_login_pass.value or ""
+            pass_val = (st_login_pass.value or "").strip()
 
             if not roll_val or not pass_val:
                 alert_st_login.show_alert("Please enter both Roll Number and Password.", is_error=True)
@@ -171,8 +171,8 @@ class AuthView:
         # ---------------------------------------------------------------------
         # TAB 2: STUDENT REGISTRATION CONTROLS
         # ---------------------------------------------------------------------
-        st_reg_roll = ft.TextField(label="Roll Number / Student ID", hint_text="Must be present in department pool", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True)
-        st_reg_name = ft.TextField(label="Full Name", prefix_icon=ft.Icons.PERSON_OUTLINED, dense=True)
+        st_reg_roll = ft.TextField(label="Roll Number / Student ID", hint_text="Must be present in department pool", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True, on_change=lambda e: setattr(st_reg_roll, "value", e.control.value))
+        st_reg_name = ft.TextField(label="Full Name", prefix_icon=ft.Icons.PERSON_OUTLINED, dense=True, on_change=lambda e: setattr(st_reg_name, "value", e.control.value))
         st_reg_dept = ft.Dropdown(label="Academic Department", options=dept_options, dense=True, value=dept_options[0].key if dept_options else None)
         st_reg_year = ft.Dropdown(
             label="Year of Study",
@@ -185,9 +185,16 @@ class AuthView:
             dense=True,
             value="FE"
         )
-        st_reg_pass = ft.TextField(label="Password (min 8 chars, 1 upper, 1 lower, 1 digit, 1 special)", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True)
-        st_reg_q = ft.TextField(label="Security Question", hint_text="e.g. What was your first school?", dense=True)
-        st_reg_ans = ft.TextField(label="Security Answer", dense=True)
+        st_reg_pass = ft.TextField(
+            label="Password (min 8 chars, 1 upper, 1 lower, 1 digit, 1 special)",
+            prefix_icon=ft.Icons.LOCK_OUTLINED,
+            password=True,
+            can_reveal_password=True,
+            dense=True,
+            on_change=lambda e: setattr(st_reg_pass, "value", e.control.value),
+        )
+        st_reg_q = ft.TextField(label="Security Question", hint_text="e.g. What was your first school?", dense=True, on_change=lambda e: setattr(st_reg_q, "value", e.control.value))
+        st_reg_ans = ft.TextField(label="Security Answer", dense=True, on_change=lambda e: setattr(st_reg_ans, "value", e.control.value))
 
         st_reg_hostel = ft.Checkbox(label="I reside in the College Hostel", value=False)
         st_hostel_name = ft.TextField(label="Hostel Name", hint_text="e.g. Boys Hostel", dense=True, visible=False)
@@ -210,7 +217,7 @@ class AuthView:
             name_val = (st_reg_name.value or "").strip()
             dept_val = st_reg_dept.value
             year_val = st_reg_year.value or "FE"
-            pass_val = st_reg_pass.value or ""
+            pass_val = (st_reg_pass.value or "").strip()
             q_val = (st_reg_q.value or "").strip()
             ans_val = (st_reg_ans.value or "").strip()
 
@@ -288,9 +295,9 @@ class AuthView:
         sf_login_role = ft.Dropdown(label="Staff Role", options=staff_roles, value=UserRole.COORDINATOR.value, dense=True)
         sf_login_dept = ft.Dropdown(label="Department", options=dept_options, dense=True, value=dept_options[0].key if dept_options else None)
         sf_login_dept_col = ft.Container(sf_login_dept, col={"xs": 12, "sm": 6})
-        sf_login_user = ft.TextField(label="Staff Username / ID", prefix_icon=ft.Icons.PERSON_OUTLINED, dense=True)
-        sf_login_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True)
-        sf_login_code = ft.TextField(label="Staff Security Code", hint_text="Role Authority Code", prefix_icon=ft.Icons.KEY_OUTLINED, password=True, can_reveal_password=True, dense=True)
+        sf_login_user = ft.TextField(label="Staff Username / ID", prefix_icon=ft.Icons.PERSON_OUTLINED, dense=True, on_change=lambda e: setattr(sf_login_user, "value", e.control.value))
+        sf_login_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_login_pass, "value", e.control.value))
+        sf_login_code = ft.TextField(label="Staff Security Code", hint_text="Role Authority Code", prefix_icon=ft.Icons.KEY_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_login_code, "value", e.control.value))
 
         def on_staff_role_change(e):
             needs_dept = sf_login_role.value in (UserRole.HOD.value, UserRole.COORDINATOR.value)
@@ -322,7 +329,7 @@ class AuthView:
             elif role_val == UserRole.GENERAL_HOD.value:
                 dept_val = SecurityCodeService._get_special_dept_id("GEN")
             user_val = (sf_login_user.value or "").strip()
-            pass_val = sf_login_pass.value or ""
+            pass_val = (sf_login_pass.value or "").strip()
             code_val = (sf_login_code.value or "").strip()
 
             if not user_val or not pass_val or not code_val:
@@ -391,12 +398,12 @@ class AuthView:
         sf_reg_role = ft.Dropdown(label="Select Staff Role", options=staff_roles, value=UserRole.COORDINATOR.value, dense=True)
         sf_reg_dept = ft.Dropdown(label="Department", options=dept_options, dense=True, value=dept_options[0].key if dept_options else None)
         sf_reg_dept_col = ft.Container(sf_reg_dept, col={"xs": 12, "sm": 6})
-        sf_reg_name = ft.TextField(label="Full Name", prefix_icon=ft.Icons.PERSON_OUTLINED, dense=True)
-        sf_reg_user = ft.TextField(label="Desired Username", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True)
-        sf_reg_pass = ft.TextField(label="Password (min 8 chars)", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True)
-        sf_reg_code = ft.TextField(label="Role Security Code", hint_text="Required to verify authority", prefix_icon=ft.Icons.KEY_OUTLINED, password=True, can_reveal_password=True, dense=True)
-        sf_reg_q = ft.TextField(label="Security Question", hint_text="e.g. First school or favourite teacher", dense=True)
-        sf_reg_ans = ft.TextField(label="Security Answer", dense=True)
+        sf_reg_name = ft.TextField(label="Full Name", prefix_icon=ft.Icons.PERSON_OUTLINED, dense=True, on_change=lambda e: setattr(sf_reg_name, "value", e.control.value))
+        sf_reg_user = ft.TextField(label="Desired Username", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True, on_change=lambda e: setattr(sf_reg_user, "value", e.control.value))
+        sf_reg_pass = ft.TextField(label="Password (min 8 chars)", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_reg_pass, "value", e.control.value))
+        sf_reg_code = ft.TextField(label="Role Security Code", hint_text="Required to verify authority", prefix_icon=ft.Icons.KEY_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_reg_code, "value", e.control.value))
+        sf_reg_q = ft.TextField(label="Security Question", hint_text="e.g. First school or favourite teacher", dense=True, on_change=lambda e: setattr(sf_reg_q, "value", e.control.value))
+        sf_reg_ans = ft.TextField(label="Security Answer", dense=True, on_change=lambda e: setattr(sf_reg_ans, "value", e.control.value))
 
         def on_reg_staff_role_change(e):
             needs_dept = sf_reg_role.value in (UserRole.HOD.value, UserRole.COORDINATOR.value)
@@ -417,7 +424,7 @@ class AuthView:
                 dept_val = SecurityCodeService._get_special_dept_id("GEN")
             user_val = (sf_reg_user.value or "").strip()
             name_val = (sf_reg_name.value or "").strip()
-            pass_val = sf_reg_pass.value or ""
+            pass_val = (sf_reg_pass.value or "").strip()
             code_val = (sf_reg_code.value or "").strip()
             q_val = (sf_reg_q.value or "").strip()
             ans_val = (sf_reg_ans.value or "").strip()

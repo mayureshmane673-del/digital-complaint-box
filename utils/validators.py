@@ -23,15 +23,18 @@ def validate_password_strength(password: str) -> Tuple[bool, str]:
     - At least one number
     - At least one special character
     """
-    if not password or len(password) < 8:
+    if not password:
         return False, "Password must be at least 8 characters long."
-    if not re.search(r"[A-Z]", password):
+    clean = password.strip()
+    if len(clean) < 8:
+        return False, "Password must be at least 8 characters long."
+    if not re.search(r"[A-Z]", clean):
         return False, "Password must contain at least one uppercase letter."
-    if not re.search(r"[a-z]", password):
+    if not re.search(r"[a-z]", clean):
         return False, "Password must contain at least one lowercase letter."
-    if not re.search(r"[0-9]", password):
+    if not re.search(r"[0-9]", clean):
         return False, "Password must contain at least one number."
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", clean):
         return False, "Password must contain at least one special character (!@#$%^&*...)."
     return True, "Password meets all security criteria."
 

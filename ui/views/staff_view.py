@@ -24,6 +24,8 @@ from ui.components.stat_card import create_stat_card
 from ui.components.complaint_card import create_complaint_card
 from ui.components.complaint_detail import show_complaint_detail_dialog
 from ui.components.excel_importer import show_excel_importer_dialog
+from ui.components.page_file_services import open_spreadsheet_import_picker
+import os
 from ui.components.animated_chart import (
     create_registered_vs_resolved_chart,
     create_campus_overview_card,
@@ -607,7 +609,13 @@ class StaffView:
             # Not registered yet: DO NOT guess academic year from roll number
             return ("NOT_REGISTERED", "Not Registered", colors["text_muted"], ft.Colors.TRANSPARENT)
 
-        single_roll_field = ft.TextField(label="Add Single Roll Number", hint_text="e.g. 240101030", dense=True, width=220)
+        single_roll_field = ft.TextField(
+            label="Add Single Roll Number",
+            hint_text="e.g. 240101030",
+            dense=True,
+            expand=True,
+            on_change=lambda e: setattr(single_roll_field, "value", e.control.value),
+        )
 
         add_btn = ft.ElevatedButton(
             content=ft.Text("Add Roll Number"),
@@ -624,7 +632,7 @@ class StaffView:
                 coordinator_role=self.role,
                 coordinator_dept_id=self.department_id,
                 coordinator_id=self.staff_id,
-                roll_number=single_roll_field.value or ""
+                roll_number=(single_roll_field.value or "").strip()
             )
 
             add_btn.disabled = False
@@ -962,6 +970,288 @@ class StaffView:
 
         refresh_table()
 
+        # -------------------------------------------------------------------------
+        # Pool Summary Metrics
+        # -------------------------------------------------------------------------
+        total_cnt = len(pool)
+        reg_cnt = sum(1 for r in pool if r.get("is_registered"))
+        avail_cnt = total_cnt - reg_cnt
+        fe_cnt = sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("FE", "FIRST YEAR", "1", "1ST", "1ST YEAR"))
+        se_cnt = sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("SE", "SECOND YEAR", "2", "2ND", "2ND YEAR"))
+        te_cnt = sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("TE", "THIRD YEAR", "3", "3RD", "3RD YEAR"))
+        be_cnt = sum(1 for r in pool if (student_records.get(r.get("roll_number", "").strip().upper(), {}).get("year") or "").strip().upper() in ("BE", "FINAL YEAR", "FOURTH YEAR", "4", "4TH", "4TH YEAR"))
+
+        def _stat_card(title: str, val: str, icon: str, color: str, sub: str = "") -> ft.Container:
+            return ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Row(
+                            controls=[
+                                ft.Text(title, size=12, color=colors["text_muted"], weight=ft.FontWeight.W_500),
+                                ft.Icon(icon, size=18, color=color),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                        ),
+                        ft.Text(val, size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                        *( [ft.Text(sub, size=11, color=colors["text_muted"])] if sub else [] )
+                    ],
+                    spacing=4
+                ),
+                bgcolor=colors["surface"],
+                border=ft.Border.all(1, colors["border"]),
+                border_radius=12,
+                padding=14,
+                shadow=get_card_shadow(is_dark)
+            )
+
+        def _year_chip(lbl: str, count: int, color: str, bg: str) -> ft.Container:
+            return ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Text(lbl, size=11, weight=ft.FontWeight.BOLD, color=color),
+                        ft.Text(str(count), size=11, weight=ft.FontWeight.BOLD, color=color)
+                    ],
+                    spacing=4
+                ),
+                bgcolor=bg,
+                border_radius=8,
+                padding=ft.padding.symmetric(horizontal=8, vertical=4)
+            )
+
+        year_breakdown_card = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Text("Academic Year Breakdown", size=12, color=colors["text_muted"], weight=ft.FontWeight.W_500),
+                            ft.Icon(ft.Icons.SCHOOL, size=18, color="#7c3aed"),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                    ),
+                    ft.Row(
+                        controls=[
+                            _year_chip("FE", fe_cnt, "#2563eb", "#dbeafe" if not is_dark else "#1e3a8a"),
+                            _year_chip("SE", se_cnt, "#7c3aed", "#ede9fe" if not is_dark else "#4c1d95"),
+                            _year_chip("TE", te_cnt, "#d97706", "#fef3c7" if not is_dark else "#78350f"),
+                            _year_chip("BE", be_cnt, "#059669", "#d1fae5" if not is_dark else "#064e3b"),
+                        ],
+                        wrap=True,
+                        spacing=6
+                    )
+                ],
+                spacing=8
+            ),
+            bgcolor=colors["surface"],
+            border=ft.Border.all(1, colors["border"]),
+            border_radius=12,
+            padding=14,
+            shadow=get_card_shadow(is_dark)
+        )
+
+        metrics_row = ft.ResponsiveRow(
+            controls=[
+                ft.Container(_stat_card("Total Authorized", str(total_cnt), ft.Icons.VERIFIED_USER, "#3b82f6", "In department pool"), col={"xs": 12, "sm": 6, "md": 3}),
+                ft.Container(_stat_card("Registered Students", str(reg_cnt), ft.Icons.HOW_TO_REG, "#10b981", f"{(reg_cnt/total_cnt*100):.1f}% activated" if total_cnt else "0%"), col={"xs": 12, "sm": 6, "md": 3}),
+                ft.Container(_stat_card("Available Slots", str(avail_cnt), ft.Icons.HOURGLASS_EMPTY, "#f59e0b", "Pending registration"), col={"xs": 12, "sm": 6, "md": 3}),
+                ft.Container(year_breakdown_card, col={"xs": 12, "sm": 6, "md": 3}),
+            ],
+            spacing=12,
+            run_spacing=12
+        )
+
+        # -------------------------------------------------------------------------
+        # Batch Importer & Single Add Inline Controls
+        # -------------------------------------------------------------------------
+        selected_import_info = [None]
+        import_status_text = ft.Text("No file selected", size=12, color=colors["text_muted"], italic=True)
+        import_btn = ft.ElevatedButton(
+            "Import File",
+            icon=ft.Icons.UPLOAD_FILE,
+            disabled=True,
+            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+        )
+        import_summary_container = ft.Column(spacing=6, visible=False)
+
+        def _set_import_status(msg: str, *, error: bool = False, primary: bool = False):
+            import_status_text.value = msg
+            import_status_text.italic = not primary and not error
+            if error:
+                import_status_text.color = "#dc2626"
+            elif primary:
+                import_status_text.color = colors["primary"]
+            else:
+                import_status_text.color = colors["text_muted"]
+
+        def on_picker_busy(busy: bool, message: str):
+            if busy and message:
+                _set_import_status(message, primary=True)
+            elif message and not busy:
+                if message.startswith("Selected:"):
+                    _set_import_status(message, primary=True)
+                elif message == "No file selected":
+                    _set_import_status(message)
+                else:
+                    _set_import_status(message, error=True)
+            self.page.update()
+
+        def on_spreadsheet_selected(info):
+            selected_import_info[0] = info
+            import_btn.disabled = info is None
+            self.page.update()
+
+        def on_choose_spreadsheet(e):
+            open_spreadsheet_import_picker(
+                self.page,
+                on_selected=on_spreadsheet_selected,
+                on_busy=on_picker_busy
+            )
+
+        def do_run_import(e):
+            if not selected_import_info[0]:
+                return
+            import_btn.disabled = True
+            import_btn.text = "Importing..."
+            self.page.update()
+
+            info = selected_import_info[0]
+            f_bytes = info.get("bytes")
+            f_path = info.get("path")
+            if not f_bytes and f_path and os.path.exists(f_path):
+                with open(f_path, "rb") as fp:
+                    f_bytes = fp.read()
+
+            summary = RollNumberService.import_excel_roll_numbers(
+                coordinator_role=self.role,
+                coordinator_dept_id=self.department_id,
+                coordinator_id=self.staff_id,
+                file_path=f_path,
+                file_bytes=f_bytes,
+                file_name=info.get("name")
+            )
+
+            if info.get("is_temp") and f_path and os.path.exists(f_path):
+                try:
+                    os.remove(f_path)
+                except Exception:
+                    pass
+
+            import_btn.disabled = False
+            import_btn.text = "Import File"
+            selected_import_info[0] = None
+            _set_import_status("No file selected")
+
+            def _chip(label: str, count: int, color: str) -> ft.Container:
+                return ft.Container(
+                    content=ft.Row(
+                        controls=[
+                            ft.Text(label, size=11, weight=ft.FontWeight.W_500),
+                            ft.Text(str(count), size=12, weight=ft.FontWeight.BOLD)
+                        ],
+                        spacing=4
+                    ),
+                    bgcolor=ft.Colors.with_opacity(0.12, color),
+                    border_radius=8,
+                    padding=ft.padding.symmetric(horizontal=8, vertical=4)
+                )
+
+            summary_rows = [
+                ft.Text(summary.get("message", ""), weight=ft.FontWeight.BOLD, size=13, color="#10b981" if summary.get("success") else "#dc2626"),
+                ft.Row(
+                    controls=[
+                        _chip("Total", summary.get("total_rows", 0), "#3b82f6"),
+                        _chip("Valid", summary.get("valid", 0), "#10b981"),
+                        _chip("Added", summary.get("added", 0), "#059669"),
+                        _chip("Duplicates", summary.get("duplicates", 0), "#d97706"),
+                        _chip("Invalid", summary.get("invalid", 0), "#ef4444"),
+                        _chip("Failed", summary.get("failed", 0), "#991b1b")
+                    ],
+                    wrap=True,
+                    spacing=8
+                )
+            ]
+            if summary.get("errors"):
+                summary_rows.append(ft.Text("Errors / Warnings:", size=12, weight=ft.FontWeight.BOLD, color="#dc2626"))
+                for err in summary["errors"][:5]:
+                    summary_rows.append(ft.Text(f"• {err}", size=11, color="#ef4444"))
+
+            import_summary_container.controls = summary_rows
+            import_summary_container.visible = True
+            show_feedback_message(self.page, summary.get("message", "Import complete"), is_error=not summary.get("success"))
+            self.page.update()
+            self._switch_view(3)
+
+        import_btn.on_click = do_run_import
+
+        management_card = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Text("Pool Management Actions", size=14, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                    ft.ResponsiveRow(
+                        controls=[
+                            # Left: Single Roll Number Quick Add
+                            ft.Container(
+                                content=ft.Column(
+                                    controls=[
+                                        ft.Text("Quick Add Single Roll Number", size=13, weight=ft.FontWeight.W_600, color=colors["text"]),
+                                        ft.Row(
+                                            controls=[
+                                                single_roll_field,
+                                                add_btn
+                                            ],
+                                            spacing=8,
+                                            vertical_alignment=ft.CrossAxisAlignment.CENTER
+                                        )
+                                    ],
+                                    spacing=8
+                                ),
+                                col={"xs": 12, "md": 6}
+                            ),
+                            # Right: Batch Spreadsheet Import
+                            ft.Container(
+                                content=ft.Column(
+                                    controls=[
+                                        ft.Row(
+                                            controls=[
+                                                ft.Text("Batch Import Spreadsheet", size=13, weight=ft.FontWeight.W_600, color=colors["text"]),
+                                                ft.Container(
+                                                    content=ft.Text(".xlsx, .xls, .csv", size=10, weight=ft.FontWeight.BOLD, color=colors["primary"]),
+                                                    bgcolor=ft.Colors.with_opacity(0.12, colors["primary"]),
+                                                    border_radius=6,
+                                                    padding=ft.padding.symmetric(horizontal=6, vertical=2)
+                                                )
+                                            ],
+                                            spacing=8
+                                        ),
+                                        ft.Row(
+                                            controls=[
+                                                ft.ElevatedButton("Choose File", icon=ft.Icons.FILE_UPLOAD, on_click=on_choose_spreadsheet),
+                                                import_btn,
+                                                ft.Container(content=import_status_text, expand=True)
+                                            ],
+                                            spacing=8,
+                                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                            wrap=True
+                                        )
+                                    ],
+                                    spacing=8
+                                ),
+                                col={"xs": 12, "md": 6}
+                            )
+                        ],
+                        spacing=16,
+                        run_spacing=16
+                    ),
+                    import_summary_container
+                ],
+                spacing=12
+            ),
+            bgcolor=colors["surface"],
+            border=ft.Border.all(1, colors["border"]),
+            border_radius=12,
+            padding=16,
+            shadow=get_card_shadow(is_dark)
+        )
+
         return ft.Column(
             controls=[
                 ft.Row(
@@ -970,10 +1260,11 @@ class StaffView:
                             controls=[
                                 ft.Text("Department Roll Number Pool", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
                                 ft.Text(f"Exclusive management for {self.department_code}. Group and sort by academic year (FE, SE, TE, BE).", size=13, color=colors["text_muted"])
-                            ]
+                            ],
+                            spacing=2
                         ),
                         ft.ElevatedButton(
-                            content=ft.Text("Import Excel / CSV"),
+                            content=ft.Text("Import Modal"),
                             icon=ft.Icons.UPLOAD_FILE,
                             style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
                             on_click=lambda _: show_excel_importer_dialog(
@@ -988,29 +1279,23 @@ class StaffView:
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     wrap=True
                 ),
-                ft.Row(
-                    controls=[
-                        single_roll_field,
-                        add_btn
-                    ],
-                    spacing=12,
-                    wrap=True
-                ),
-                ft.Divider(color=colors["border"]),
+                metrics_row,
+                management_card,
+                ft.Divider(color=colors["border"], height=1),
                 ft.ResponsiveRow(
                     controls=[
                         ft.Container(search_filter, col={"xs": 12, "md": 5}),
                         ft.Container(year_filter, col={"xs": 12, "sm": 6, "md": 3.5}),
                         ft.Container(sort_filter, col={"xs": 12, "sm": 6, "md": 3.5})
-                    ]
+                    ],
+                    spacing=10
                 ),
                 count_text,
                 scrollable_table,
                 mobile_cards_column
             ],
             scroll=ft.ScrollMode.AUTO,
-            spacing=16,
-            expand=True
+            spacing=16
         )
 
     # -------------------------------------------------------------------------

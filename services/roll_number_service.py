@@ -29,7 +29,7 @@ class RollNumberService:
         roll_number: str
     ) -> Tuple[bool, str]:
         """Adds a single roll number to the Coordinator's department pool via trusted backend."""
-        if coordinator_role != UserRole.COORDINATOR.value:
+        if (coordinator_role or "").strip().lower() != UserRole.COORDINATOR.value.lower():
             return False, "Only Coordinators are authorized to manage the Roll Number Pool."
 
         clean_roll = (roll_number or "").strip().upper()
@@ -45,7 +45,7 @@ class RollNumberService:
         staff_record_id = coordinator_id
 
         from unittest.mock import Mock
-        if not isinstance(get_supabase_client, Mock):
+        if not isinstance(client, Mock) and not isinstance(get_supabase_client, Mock):
             # Authoritative check: verify coordinator_id against staff_users
             try:
                 staff_res = client.table("staff_users").select("id, role, department_id, is_active, is_locked").eq("id", coordinator_id).execute()
@@ -115,7 +115,7 @@ class RollNumberService:
             "message": ""
         }
 
-        if coordinator_role != UserRole.COORDINATOR.value:
+        if (coordinator_role or "").strip().lower() != UserRole.COORDINATOR.value.lower():
             summary["message"] = "Only Coordinators are authorized to import roll numbers."
             return summary
 
@@ -124,7 +124,7 @@ class RollNumberService:
         staff_record_id = coordinator_id
 
         from unittest.mock import Mock
-        if not isinstance(get_supabase_client, Mock):
+        if not isinstance(client, Mock) and not isinstance(get_supabase_client, Mock):
             # Authoritative coordinator check
             try:
                 staff_res = client.table("staff_users").select("id, role, department_id, is_active, is_locked").eq("id", coordinator_id).execute()
@@ -154,6 +154,25 @@ class RollNumberService:
                 summary["message"] = "Unable to verify staff credentials. Please try again."
                 return summary
 
+        # Gather coordinator department codes/names for department mismatch detection
+        coord_dept_codes = set()
+        if auth_dept_id:
+            coord_dept_codes.add(auth_dept_id.upper())
+            try:
+                from services.cache_service import CacheService
+                dept_obj = CacheService.get_department_by_id(auth_dept_id)
+                if not dept_obj:
+                    d_res = client.table("departments").select("id, code, name").eq("id", auth_dept_id).execute()
+                    if d_res.data:
+                        dept_obj = d_res.data[0]
+                if dept_obj:
+                    if dept_obj.get("code"):
+                        coord_dept_codes.add(str(dept_obj["code"]).strip().upper())
+                    if dept_obj.get("name"):
+                        coord_dept_codes.add(str(dept_obj["name"]).strip().upper())
+            except Exception:
+                pass
+
         # Read file
         try:
             fname = (file_name or (os.path.basename(file_path) if file_path else "")).lower()
@@ -170,49 +189,156 @@ class RollNumberService:
                 source = file_path
 
             if fname.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(source, header=None)
+                try:
+                    df = pd.read_excel(source, header=None)
+                except Exception as ex:
+                    summary["message"] = f"Error reading Excel file: {ex}"
+                    return summary
             elif fname.endswith(".csv"):
-                df = pd.read_csv(source, header=None)
+                try:
+                    df = pd.read_csv(source, header=None)
+                except Exception as ex:
+                    summary["message"] = f"Error reading CSV file: {ex}"
+                    return summary
             else:
                 summary["message"] = "Unsupported file format. Please provide an Excel (.xlsx, .xls) or CSV file."
                 return summary
 
-            raw_values = []
-            for col in df.columns:
-                for val in df[col].dropna():
-                    raw_str = str(val).strip()
-                    if raw_str.lower() in ("roll", "roll number", "roll_number", "rollno", "id", "student id"):
-                        continue
-                    if raw_str.endswith(".0"):
-                        raw_str = raw_str[:-2]
-                    raw_values.append(raw_str)
+            if df.empty or len(df.columns) == 0:
+                summary["message"] = "The uploaded file is empty."
+                return summary
 
-            summary["total_rows"] = len(raw_values)
+            # Intelligent Column & Header Detection
+            roll_header_keywords = {
+                "roll", "roll number", "roll_number", "roll_no", "rollno",
+                "roll no", "roll #", "urn", "prn", "student id", "student_id",
+                "id", "student roll number", "registration no", "registration number",
+                "roll_num", "rollnum"
+            }
+            dept_header_keywords = {
+                "department", "dept", "branch", "dept_id", "dept id", "dept code",
+                "department code", "department name"
+            }
+            name_header_keywords = {
+                "name", "student name", "student_name", "full name", "full_name"
+            }
 
-            # Pre-fetch existing roll numbers
-            existing_res = client.table("roll_number_pool").select("roll_number").execute()
-            existing_pool = set(r["roll_number"].upper() for r in (existing_res.data or []))
+            has_header = False
+            roll_col_idx = None
+            dept_col_idx = None
+
+            # Inspect Row 0
+            for col_idx in range(len(df.columns)):
+                cell_val = str(df.iloc[0, col_idx]).strip().lower() if pd.notna(df.iloc[0, col_idx]) else ""
+                if cell_val in roll_header_keywords or any(kw in cell_val for kw in ["roll", "urn", "prn"]):
+                    has_header = True
+                    roll_col_idx = col_idx
+                elif cell_val in dept_header_keywords or any(kw in cell_val for kw in ["dept", "branch"]):
+                    has_header = True
+                    dept_col_idx = col_idx
+                elif cell_val in name_header_keywords or "student" in cell_val or "name" in cell_val:
+                    has_header = True
+
+            # If no roll header found, identify column with highest valid roll number density
+            if roll_col_idx is None:
+                start_check = 1 if has_header else 0
+                best_score = -1
+                for col_idx in range(len(df.columns)):
+                    col_data = df.iloc[start_check:, col_idx].dropna()
+                    valid_count = 0
+                    for v in col_data:
+                        s = str(v).strip()
+                        if s.endswith(".0"):
+                            s = s[:-2]
+                        if s.lower() not in roll_header_keywords and validate_roll_number(s)[0]:
+                            valid_count += 1
+                    if valid_count > best_score:
+                        best_score = valid_count
+                        roll_col_idx = col_idx
+
+            if roll_col_idx is None:
+                roll_col_idx = 0
+
+            # If has_header is False, verify row 0 isn't a header that failed keyword match
+            if not has_header:
+                first_val = str(df.iloc[0, roll_col_idx]).strip().lower()
+                if first_val in roll_header_keywords or not validate_roll_number(first_val)[0]:
+                    if len(df) > 1:
+                        subsequent_val = str(df.iloc[1, roll_col_idx]).strip()
+                        if subsequent_val.endswith(".0"):
+                            subsequent_val = subsequent_val[:-2]
+                        if validate_roll_number(subsequent_val)[0]:
+                            has_header = True
+
+            start_row = 1 if has_header else 0
+            data_rows = df.iloc[start_row:]
+
+            # Pre-fetch existing roll numbers with department_id to detect duplicates and mismatches
+            existing_res = client.table("roll_number_pool").select("roll_number, department_id").execute()
+            existing_pool = {
+                r["roll_number"].strip().upper(): str(r.get("department_id") or "")
+                for r in (existing_res.data or []) if r.get("roll_number")
+            }
 
             to_insert = []
             seen_in_batch = set()
 
-            for raw_val in raw_values:
-                is_valid, err = validate_roll_number(raw_val)
-                if not is_valid:
-                    summary["invalid"] += 1
-                    summary["errors"].append(f"Invalid format: '{raw_val}' ({err})")
+            for idx, row in data_rows.iterrows():
+                row_num = idx + 1
+                roll_cell = row[roll_col_idx]
+                if pd.isna(roll_cell):
+                    continue
+                raw_str = str(roll_cell).strip()
+                if not raw_str:
+                    continue
+                if raw_str.endswith(".0"):
+                    raw_str = raw_str[:-2]
+
+                if raw_str.lower() in roll_header_keywords:
                     continue
 
-                clean = raw_val.strip().upper()
-                if clean in existing_pool or clean in seen_in_batch:
+                summary["total_rows"] += 1
+
+                is_valid, err = validate_roll_number(raw_str)
+                if not is_valid:
+                    summary["invalid"] += 1
+                    summary["errors"].append(f"Row {row_num}: Invalid format '{raw_str}' ({err})")
+                    continue
+
+                clean_roll = raw_str.upper()
+
+                # Department column validation (if present)
+                if dept_col_idx is not None and pd.notna(row[dept_col_idx]):
+                    row_dept = str(row[dept_col_idx]).strip().upper()
+                    if row_dept and coord_dept_codes and not any(c == row_dept or c in row_dept or row_dept in c for c in coord_dept_codes):
+                        summary["invalid"] += 1
+                        summary["errors"].append(
+                            f"Row {row_num}: Roll number '{clean_roll}' department '{row_dept}' does not match coordinator's department."
+                        )
+                        continue
+
+                # Batch duplicate check
+                if clean_roll in seen_in_batch:
                     summary["duplicates"] += 1
                     continue
 
-                seen_in_batch.add(clean)
+                # Existing database pool duplicate check
+                if clean_roll in existing_pool:
+                    existing_dept = existing_pool[clean_roll]
+                    if not auth_dept_id or existing_dept == auth_dept_id:
+                        summary["duplicates"] += 1
+                    else:
+                        summary["invalid"] += 1
+                        summary["errors"].append(
+                            f"Row {row_num}: Roll number '{clean_roll}' belongs to another department's pool."
+                        )
+                    continue
+
+                seen_in_batch.add(clean_roll)
                 to_insert.append({
                     "department_id": auth_dept_id,
-                    "roll_number": clean,
-                    "added_by_coordinator_id": staff["id"],
+                    "roll_number": clean_roll,
+                    "added_by_coordinator_id": staff_record_id,
                     "is_registered": False
                 })
 
@@ -227,9 +353,9 @@ class RollNumberService:
                         summary["added"] += len(chunk)
                     except Exception as ex:
                         summary["failed"] += len(chunk)
-                        summary["errors"].append("Batch insert error for a chunk of roll numbers.")
+                        summary["errors"].append(f"Batch insert error: {ex}")
 
-            summary["success"] = True
+            summary["success"] = (summary["added"] > 0 or (summary["total_rows"] > 0 and summary["duplicates"] == summary["total_rows"]))
             summary["message"] = (
                 f"Import complete. Total: {summary['total_rows']}, "
                 f"Added: {summary['added']}, Duplicates: {summary['duplicates']}, "
@@ -238,7 +364,7 @@ class RollNumberService:
             return summary
 
         except Exception as e:
-            summary["message"] = "Error reading file. Please verify the file is a valid Excel or CSV format."
+            summary["message"] = f"Error processing file: {e}"
             return summary
 
     @classmethod

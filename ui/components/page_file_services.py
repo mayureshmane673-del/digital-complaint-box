@@ -825,11 +825,17 @@ def open_spreadsheet_import_picker(
         current = _get_import_upload_queue(page)[0]
         _set_import_upload_active(page, True)
         try:
-            # picker.upload is a coroutine function; pass it to run_task with args
+            raw_id = current.get("file_id")
+            upload_id = None
+            if isinstance(raw_id, int):
+                upload_id = raw_id
+            elif isinstance(raw_id, str) and raw_id.isdigit():
+                upload_id = int(raw_id)
+
             upload_args = [
                 ft.FilePickerUploadFile(
                     name=current["file_name"],
-                    id=current["file_id"],
+                    id=upload_id,
                     upload_url=current["upload_url"],
                     method="PUT",
                 )
@@ -852,16 +858,23 @@ def open_spreadsheet_import_picker(
             _set_import_upload_active(page, False)
             _process_import_queue()
 
-    def _on_import_upload(e: ft.FilePickerUploadEvent) -> None:
+    def _on_import_upload(page_or_e: Any, e: Optional[ft.FilePickerUploadEvent] = None) -> None:
+        if e is not None:
+            event = e
+        else:
+            event = page_or_e
+
         queue = _get_import_upload_queue(page)
         if not queue:
             return
         current = queue[0]
         # FilePickerUploadEvent has file_name, not file_id. Match by file_name.
-        if e.file_name != current["file_name"]:
+        evt_name = getattr(event, "file_name", None)
+        if evt_name != current["file_name"]:
             return
-        if e.error:
-            logger.warning("[IMPORT] upload error for %s: %s", current["file_name"], e.error)
+        evt_err = getattr(event, "error", None)
+        if evt_err:
+            logger.warning("[IMPORT] upload error for %s: %s", current["file_name"], evt_err)
             queue.pop(0)
             _set_import_upload_queue(page, queue)
             _set_import_upload_active(page, False)
@@ -870,9 +883,11 @@ def open_spreadsheet_import_picker(
             return
         if current["done"]:
             return
+        evt_progress = getattr(event, "progress", None)
+        evt_status = getattr(event, "status", None)
         if (
-            (e.progress is not None and e.progress >= 0.99)
-            or getattr(e, "status", None) == "done"
+            (evt_progress is not None and evt_progress >= 0.99)
+            or evt_status == "done"
         ):
             current["done"] = True
             queue.pop(0)
@@ -885,6 +900,7 @@ def open_spreadsheet_import_picker(
             _process_import_queue()
 
     # Stable upload callback for the lifetime of the picker
+    setattr(picker, "_dcb_page", page)
     picker.on_upload = _on_import_upload
     try:
         picker.update()
