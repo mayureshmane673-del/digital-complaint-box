@@ -68,6 +68,8 @@ def main(page: ft.Page):
     current_portal_content = [None]
 
     def on_logout():
+        from ui.flet_compat import clear_all_dialogs
+        clear_all_dialogs(page)
         clear_auth_session(page)
         AppState.clear_user()
         page.appbar = None
@@ -79,39 +81,26 @@ def main(page: ft.Page):
         save_auth_session(page, user_data, role)
         AppState.set_user(user_data, role)
 
-        # 2. Await persistent SharedPreferences write BEFORE rendering authenticated portal
+        # Clear any feedback messages, SnackBars, or modal route barriers from auth view
+        from ui.flet_compat import clear_all_dialogs
+        clear_all_dialogs(page)
+
+        # 2. Render authenticated portal immediately so user is never stuck on "Signing in..."
+        render_portal_view(initial_tab=0)
+
+        # 3. Persist SharedPreferences asynchronously with timeout in background task
         if hasattr(page, "run_task"):
-            async def _persist_and_render_portal():
+            async def _persist_auth_task():
                 import asyncio
                 persisted = False
-                tab = 0
-                sid = str(user_data.get("id") or "")
-
-                if role == UserRole.STUDENT.value:
-                    try:
-                        results = await asyncio.gather(
-                            save_auth_session_async(page, user_data, role),
-                            restore_active_tab_async(page, expected_owner_id=sid),
-                            restore_complaint_draft_async(page, expected_owner_id=sid),
-                            return_exceptions=True
-                        )
-                        persisted = results[0] if isinstance(results[0], bool) else False
-                        restored_tab = results[1] if not isinstance(results[1], Exception) else None
-                        draft = results[2] if not isinstance(results[2], Exception) else None
-
-                        if restored_tab is not None:
-                            tab = restored_tab
-                        elif draft and (draft.get("title") or draft.get("description") or draft.get("temp_files")):
-                            tab = 1
-                    except Exception as ex:
-                        logger.warning("Error during concurrent student session persistence: %s", type(ex).__name__)
-                        persisted = False
-                else:
-                    try:
-                        persisted = await save_auth_session_async(page, user_data, role)
-                    except Exception as save_ex:
-                        logger.warning("save_auth_session_async failed during login: %s", type(save_ex).__name__)
-                        persisted = False
+                try:
+                    persisted = await asyncio.wait_for(
+                        save_auth_session_async(page, user_data, role),
+                        timeout=2.0
+                    )
+                except Exception as save_ex:
+                    logger.warning("save_auth_session_async failed or timed out: %s", type(save_ex).__name__)
+                    persisted = False
 
                 setattr(page, "_dcb_auth_persisted", persisted)
                 if not persisted:
@@ -119,15 +108,10 @@ def main(page: ft.Page):
                 else:
                     logger.debug("[AUTH] Persistent auth save confirmed for user %s", user_data.get("id"))
 
-                render_portal_view(initial_tab=tab)
-
             try:
-                page.run_task(_persist_and_render_portal)
-                return
+                page.run_task(_persist_auth_task)
             except Exception as launch_ex:
-                logger.warning("Failed to launch persist_and_render_portal task: %s", type(launch_ex).__name__)
-
-        render_portal_view()
+                logger.warning("Failed to launch persist_auth_task: %s", type(launch_ex).__name__)
 
     def render_auth_view(initial_tab: int = 0):
         is_dark = AppState.is_dark_mode
@@ -195,6 +179,9 @@ def main(page: ft.Page):
             render_auth_view()
             return
 
+        from ui.flet_compat import clear_all_dialogs
+        clear_all_dialogs(page)
+
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
         page.bgcolor = colors["bg"]
@@ -243,9 +230,24 @@ def main(page: ft.Page):
             if hasattr(page, "navigation_bar") and page.navigation_bar:
                 page.navigation_bar.selected_index = index
             if current_active_view[0]:
-                current_active_view[0]._switch_view(index)
+                try:
+                    current_active_view[0]._switch_view(index)
+                except Exception as switch_ex:
+                    logger.exception("Error switching view: %s", switch_ex)
 
         compact = is_compact_screen()
+
+        # Set navigation layout BEFORE rendering view content so child views can reliably detect mobile layout
+        if compact:
+            page.navigation_bar = create_bottom_nav_bar(
+                role, current_active_view[0].selected_tab_index, on_nav_change
+            )
+            current_nav_rail[0] = None
+        else:
+            page.navigation_bar = None
+            rail = create_navigation_rail(role, current_active_view[0].selected_tab_index, on_nav_change, compact=False)
+            current_nav_rail[0] = rail
+
         content_container = ft.Container(
             content=current_active_view[0].render(),
             expand=True,
@@ -255,19 +257,12 @@ def main(page: ft.Page):
 
         page.clean()
         if compact:
-            page.navigation_bar = create_bottom_nav_bar(
-                role, current_active_view[0].selected_tab_index, on_nav_change
-            )
-            current_nav_rail[0] = None
             page.add(content_container)
         else:
-            page.navigation_bar = None
-            rail = create_navigation_rail(role, current_active_view[0].selected_tab_index, on_nav_change, compact=False)
-            current_nav_rail[0] = rail
             page.add(
                 ft.Row(
                     controls=[
-                        rail,
+                        current_nav_rail[0],
                         ft.VerticalDivider(width=1, color=colors["border"]),
                         content_container
                     ],

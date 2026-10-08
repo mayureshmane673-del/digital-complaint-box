@@ -318,22 +318,56 @@ def close_dialog(page: ft.Page, dialog: ft.Control = None):
             dialog.update()
         except Exception:
             pass
-    if hasattr(page, "pop_dialog"):
-        try:
-            page.pop_dialog()
-            return
-        except Exception:
-            pass
-    if dialog is not None and hasattr(page, "_remove_dialog"):
-        try:
-            page._remove_dialog(dialog)
-            return
-        except Exception:
-            pass
+        if hasattr(page, "_remove_dialog"):
+            try:
+                page._remove_dialog(dialog)
+            except Exception:
+                pass
+        elif hasattr(page, "_dialogs") and hasattr(page._dialogs, "controls") and dialog in page._dialogs.controls:
+            try:
+                page._dialogs.controls.remove(dialog)
+                page._dialogs.update()
+            except Exception:
+                pass
+    else:
+        if hasattr(page, "pop_dialog"):
+            try:
+                popped = page.pop_dialog()
+                if popped and hasattr(page, "_remove_dialog"):
+                    page._remove_dialog(popped)
+                elif popped and hasattr(page, "_dialogs") and hasattr(page._dialogs, "controls") and popped in page._dialogs.controls:
+                    page._dialogs.controls.remove(popped)
+                    page._dialogs.update()
+            except Exception:
+                pass
     page.dialog = None
-    page.update()
+    try:
+        page.update()
+    except Exception:
+        pass
 
-def show_feedback_message(page: ft.Page, message: str, is_error: bool = False, duration_ms: int = 4500):
+def clear_all_dialogs(page: ft.Page):
+    """Completely purges all open dialogs, SnackBars, and modal route barriers from the page."""
+    if hasattr(page, "_dialogs") and page._dialogs and hasattr(page._dialogs, "controls"):
+        if page._dialogs.controls:
+            for dlg in list(page._dialogs.controls):
+                dlg.open = False
+                try:
+                    dlg.update()
+                except Exception:
+                    pass
+            page._dialogs.controls.clear()
+            try:
+                page._dialogs.update()
+            except Exception:
+                pass
+    page.dialog = None
+    try:
+        page.update()
+    except Exception:
+        pass
+
+def show_feedback_message(page: ft.Page, message: str, is_error: bool = False, duration_ms: int = 2800):
     """Reliable helper to display an animated feedback message on any Flet page."""
     sb = ft.SnackBar(
         content=ft.Row(
@@ -344,12 +378,20 @@ def show_feedback_message(page: ft.Page, message: str, is_error: bool = False, d
             spacing=10
         ),
         bgcolor="#dc2626" if is_error else "#059669",
-        duration=duration_ms
+        duration=duration_ms,
+        behavior=ft.SnackBarBehavior.FLOATING,
+        show_close_icon=True
     )
     if hasattr(page, "show_dialog"):
-        page.show_dialog(sb)
-    else:
-        page.snack_bar = sb
+        try:
+            page.show_dialog(sb)
+            return
+        except Exception:
+            pass
+    page.snack_bar = sb
+    try:
         page.update()
+    except Exception:
+        pass
 
 init_flet_compatibility()

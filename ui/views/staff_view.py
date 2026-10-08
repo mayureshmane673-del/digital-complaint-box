@@ -99,14 +99,14 @@ class StaffView:
         else:
             views = [self._render_dashboard, self._render_account_management]
 
-        target_func = views[index] if index < len(views) else self._render_dashboard
-        view_content = target_func()
-        self._tab_cache[index] = view_content
-        self.active_container.content = view_content
         try:
+            target_func = views[index] if index < len(views) else self._render_dashboard
+            view_content = target_func()
+            self._tab_cache[index] = view_content
+            self.active_container.content = view_content
             self.page.update()
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.exception("Error switching staff view to tab %s: %s", index, ex)
 
     def _render_account_management(self) -> ft.Control:
         from ui.views.account_view import AccountView
@@ -841,7 +841,10 @@ class StaffView:
             rows=[]
         )
 
-        is_mobile_initial = (getattr(self.page, "width", None) or 1200) < 768
+        is_mobile_initial = bool(
+            getattr(self.page, "navigation_bar", None) is not None
+            or (getattr(self.page, "width", None) is not None and self.page.width < 768)
+        )
 
         scrollable_table = ft.Row(
             controls=[data_table],
@@ -904,7 +907,10 @@ class StaffView:
             elif s_val == "DATE_DESC":
                 filtered.sort(key=lambda x: x["created_at"], reverse=True)
 
-            is_mobile = (getattr(self.page, "width", None) or 1200) < 768
+            is_mobile = bool(
+                getattr(self.page, "navigation_bar", None) is not None
+                or (getattr(self.page, "width", None) is not None and self.page.width < 768)
+            )
 
             if not is_mobile:
                 # Desktop: build ONLY DataRows to avoid mobile widget memory overhead

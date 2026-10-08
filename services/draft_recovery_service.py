@@ -372,8 +372,8 @@ async def _purge_persistent_auth(page: ft.Page, sp: Optional[Any] = None) -> Non
         sp = get_shared_preferences(page)
     if sp and hasattr(page, "session") and getattr(page.session, "id", None):
         try:
-            await sp.remove(SP_KEY_USER)
-            await sp.remove(SP_KEY_ROLE)
+            await asyncio.wait_for(sp.remove(SP_KEY_USER), timeout=1.5)
+            await asyncio.wait_for(sp.remove(SP_KEY_ROLE), timeout=1.5)
         except Exception:
             pass
 
@@ -398,8 +398,8 @@ async def save_auth_session_async(page: ft.Page, user: Dict[str, Any], role: str
         return False
 
     try:
-        await sp.set(SP_KEY_USER, json.dumps(safe_user))
-        await sp.set(SP_KEY_ROLE, clean_role)
+        await asyncio.wait_for(sp.set(SP_KEY_USER, json.dumps(safe_user)), timeout=1.5)
+        await asyncio.wait_for(sp.set(SP_KEY_ROLE, clean_role), timeout=1.5)
         return True
     except Exception as ex:
         logger.warning("save_auth_session_async: persistent storage write error: %s", type(ex).__name__)
@@ -432,10 +432,10 @@ async def clear_auth_session_async(page: ft.Page) -> None:
     try:
         sp = get_shared_preferences(page)
         if sp and hasattr(page, "session") and getattr(page.session, "id", None):
-            await sp.remove(SP_KEY_USER)
-            await sp.remove(SP_KEY_ROLE)
-            await sp.remove(SP_KEY_ACTIVE_TAB)
-            await sp.remove(SP_KEY_DRAFT)
+            await asyncio.wait_for(sp.remove(SP_KEY_USER), timeout=1.5)
+            await asyncio.wait_for(sp.remove(SP_KEY_ROLE), timeout=1.5)
+            await asyncio.wait_for(sp.remove(SP_KEY_ACTIVE_TAB), timeout=1.5)
+            await asyncio.wait_for(sp.remove(SP_KEY_DRAFT), timeout=1.5)
     except Exception as ex:
         logger.debug("clear_auth_session_async: storage cleanup error: %s", type(ex).__name__)
 
@@ -606,7 +606,7 @@ async def save_active_tab_async(page: ft.Page, tab_index: int, owner_id: Optiona
                 "tab_index": int(tab_index),
                 "owner_id": str(owner_id).strip() if owner_id else None
             }
-            await sp.set(SP_KEY_ACTIVE_TAB, json.dumps(payload))
+            await asyncio.wait_for(sp.set(SP_KEY_ACTIVE_TAB, json.dumps(payload)), timeout=1.5)
     except Exception as ex:
         logger.debug("save_active_tab_async: storage write error: %s", type(ex).__name__)
 
@@ -706,7 +706,7 @@ async def save_complaint_draft_async(
     try:
         sp = get_shared_preferences(page)
         if sp and hasattr(page, "session") and getattr(page.session, "id", None):
-            await sp.set(SP_KEY_DRAFT, json.dumps(safe_draft))
+            await asyncio.wait_for(sp.set(SP_KEY_DRAFT, json.dumps(safe_draft)), timeout=1.5)
     except Exception as ex:
         logger.debug("save_complaint_draft_async: storage write error: %s", type(ex).__name__)
 
@@ -777,7 +777,7 @@ async def restore_complaint_draft_async(
                             logger.info(
                                 "[SECURITY] Discarding draft: owner mismatch with authenticated user"
                             )
-                            await sp.remove(SP_KEY_DRAFT)
+                            await asyncio.wait_for(sp.remove(SP_KEY_DRAFT), timeout=1.5)
         except Exception:
             logger.debug("restore_complaint_draft_async: storage read error")
 

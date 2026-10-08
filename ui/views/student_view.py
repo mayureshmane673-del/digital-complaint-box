@@ -148,7 +148,6 @@ class StudentView:
                 self.page.session.store.set("active_tab_index", index)
         except Exception:
             pass
-        save_active_tab(self.page, index, owner_id=self.student_id)
 
         # Fast path: instant tab switching from cached controls
         if index in self._tab_cache:
@@ -159,38 +158,38 @@ class StudentView:
                 pass
             return
 
-        if index == 0:
-            if self.cached_complaints is None:
-                self._trigger_progressive_dashboard_load()
-            content = self._render_dashboard()
-        elif index == 1:
-            content = self._render_new_complaint()
-        elif index == 2:
-            content = self._render_my_complaints()
-        elif index == 3:
-            content = self._render_feedback()
-        elif index == 4:
-            content = self._render_hostel_status()
-        elif index == 5:
-            from ui.views.account_view import AccountView
-            content = AccountView(
-                self.page,
-                self.student,
-                UserRole.STUDENT.value,
-                on_refresh=lambda: self._switch_view(self.selected_tab_index)
-            ).render()
-        else:
-            content = self._render_dashboard()
-
-        # Cache tab content for instant navigation (dashboard is cached once complaints loaded)
-        if index != 0 or self.cached_complaints is not None:
-            self._tab_cache[index] = content
-
-        self.active_container.content = content
         try:
+            if index == 0:
+                if self.cached_complaints is None:
+                    self._trigger_progressive_dashboard_load()
+                content = self._render_dashboard()
+            elif index == 1:
+                content = self._render_new_complaint()
+            elif index == 2:
+                content = self._render_my_complaints()
+            elif index == 3:
+                content = self._render_feedback()
+            elif index == 4:
+                content = self._render_hostel_status()
+            elif index == 5:
+                from ui.views.account_view import AccountView
+                content = AccountView(
+                    self.page,
+                    self.student,
+                    UserRole.STUDENT.value,
+                    on_refresh=lambda: self._switch_view(self.selected_tab_index)
+                ).render()
+            else:
+                content = self._render_dashboard()
+
+            # Cache tab content for instant navigation (dashboard is cached once complaints loaded)
+            if index != 0 or self.cached_complaints is not None:
+                self._tab_cache[index] = content
+
+            self.active_container.content = content
             self.page.update()
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.exception("Error switching student view to tab %s: %s", index, ex)
 
     # -------------------------------------------------------------------------
     # TAB 0: DASHBOARD
@@ -1800,7 +1799,7 @@ class StudentView:
                                                         f"#{cid}",
                                                         size=15, weight=ft.FontWeight.BOLD,
                                                         color=colors["primary"],
-                                                        decoration=ft.TextDecoration.UNDERLINE
+                                                        style=ft.TextStyle(decoration=ft.TextDecoration.UNDERLINE)
                                                     ),
                                                     on_click=lambda _, c=comp: _open_complaint_detail_with_feedback(c),
                                                     style=ft.ButtonStyle(

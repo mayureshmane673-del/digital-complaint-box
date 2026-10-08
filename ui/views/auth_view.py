@@ -119,6 +119,17 @@ class AuthView:
                 show_feedback_message(self.page, "Please enter both Roll Number and Password.", is_error=True)
                 return
 
+            def _reset_student_btn():
+                btn_st_login.disabled = False
+                btn_st_login.content = ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.LOGIN, color=ft.Colors.WHITE, size=18),
+                        ft.Text("Login", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=8
+                )
+
             btn_st_login.disabled = True
             btn_st_login.content = ft.Row(
                 controls=[
@@ -137,31 +148,20 @@ class AuthView:
                 logger.info("Student auth query completed in %.3fs", elapsed)
                 if ok and student:
                     show_feedback_message(self.page, "Login successful!", is_error=False)
-                    self.on_authenticated(student, UserRole.STUDENT.value)
+                    try:
+                        self.on_authenticated(student, UserRole.STUDENT.value)
+                    except Exception as auth_cb_ex:
+                        logger.exception("Student auth callback error: %s", auth_cb_ex)
+                        _reset_student_btn()
+                        self.page.update()
                 else:
-                    btn_st_login.disabled = False
-                    btn_st_login.content = ft.Row(
-                        controls=[
-                            ft.Icon(ft.Icons.LOGIN, color=ft.Colors.WHITE, size=18),
-                            ft.Text("Login", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
-                        ],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        spacing=8
-                    )
+                    _reset_student_btn()
                     alert_st_login.show_alert(msg, is_error=True)
                     show_feedback_message(self.page, msg, is_error=True)
                     self.page.update()
             except Exception as ex:
                 logger.exception("Student login error: %s", ex)
-                btn_st_login.disabled = False
-                btn_st_login.content = ft.Row(
-                    controls=[
-                        ft.Icon(ft.Icons.LOGIN, color=ft.Colors.WHITE, size=18),
-                        ft.Text("Login", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    spacing=8
-                )
+                _reset_student_btn()
                 alert_st_login.show_alert("Unable to complete login. Please try again.", is_error=True)
                 show_feedback_message(self.page, "Unable to complete login. Please try again.", is_error=True)
                 self.page.update()
@@ -337,6 +337,17 @@ class AuthView:
                 show_feedback_message(self.page, "Invalid username, password, or security code.", is_error=True)
                 return
 
+            def _reset_staff_btn():
+                btn_sf_login.disabled = False
+                btn_sf_login.content = ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.LOCK_OPEN, color=ft.Colors.WHITE, size=18),
+                        ft.Text("Staff Sign In", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=8
+                )
+
             btn_sf_login.disabled = True
             btn_sf_login.content = ft.Row(
                 controls=[
@@ -361,31 +372,20 @@ class AuthView:
                 logger.info("Staff auth query completed in %.3fs", elapsed)
                 if ok and staff:
                     show_feedback_message(self.page, "Staff login successful!", is_error=False)
-                    self.on_authenticated(staff, role_val)
+                    try:
+                        self.on_authenticated(staff, role_val)
+                    except Exception as auth_cb_ex:
+                        logger.exception("Staff auth callback error: %s", auth_cb_ex)
+                        _reset_staff_btn()
+                        self.page.update()
                 else:
-                    btn_sf_login.disabled = False
-                    btn_sf_login.content = ft.Row(
-                        controls=[
-                            ft.Icon(ft.Icons.LOCK_OPEN, color=ft.Colors.WHITE, size=18),
-                            ft.Text("Staff Sign In", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
-                        ],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        spacing=8
-                    )
+                    _reset_staff_btn()
                     alert_sf_login.show_alert(msg, is_error=True)
                     show_feedback_message(self.page, msg, is_error=True)
                     self.page.update()
             except Exception as ex:
                 logger.exception("Staff login error: %s", ex)
-                btn_sf_login.disabled = False
-                btn_sf_login.content = ft.Row(
-                    controls=[
-                        ft.Icon(ft.Icons.LOCK_OPEN, color=ft.Colors.WHITE, size=18),
-                        ft.Text("Staff Sign In", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    spacing=8
-                )
+                _reset_staff_btn()
                 alert_sf_login.show_alert("Invalid username, password, or security code.", is_error=True)
                 show_feedback_message(self.page, "Invalid username, password, or security code.", is_error=True)
                 self.page.update()
