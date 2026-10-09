@@ -1810,7 +1810,6 @@ class StudentView:
                                                 ft.Text(f"  {title[:50]}", size=14, weight=ft.FontWeight.W_600, color=colors["text"], expand=True)
                                             ],
                                             spacing=0,
-                                            wrap=True,
                                             expand=True
                                         ),
                                         ft.Row(
@@ -1832,8 +1831,7 @@ class StudentView:
                                         )
                                     ],
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                    wrap=True
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER
                                 ),
                                 # Metadata: Category, Department, Resolved Date
                                 ft.Row(
@@ -1880,8 +1878,7 @@ class StudentView:
                                         )
                                     ],
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                    wrap=True
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER
                                 )
                             ],
                             spacing=8
@@ -1987,8 +1984,7 @@ class StudentView:
                         search_field,
                         filter_status
                     ],
-                    spacing=10,
-                    wrap=True
+                    spacing=10
                 ),
                 ft.Divider(color=colors["border"]),
                 complaints_list_container
