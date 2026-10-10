@@ -21,7 +21,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 import flet as ft
 import ui.flet_compat  # Initialize Flet 0.86+ backward compatibility shim
-from ui.theme import create_app_theme, COLOR_BG, COLOR_BG_DARK, get_theme_colors, COLOR_PRIMARY
+from ui.theme import create_app_theme, COLOR_BG, COLOR_BG_DARK, get_theme_colors, COLOR_PRIMARY, is_compact_width
 from ui.state import AppState
 from ui.views.auth_view import AuthView
 from ui.views.student_view import StudentView
@@ -168,8 +168,7 @@ def main(page: ft.Page):
         page.update()
 
     def is_compact_screen() -> bool:
-        w = page.width or 1000
-        return w < 768
+        return is_compact_width(getattr(page, "width", None))
 
     def render_force_password_change_view():
         user = AppState.current_user

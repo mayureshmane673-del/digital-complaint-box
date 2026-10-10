@@ -12,7 +12,8 @@ from services.auth_service import AuthService
 from database.supabase_client import get_supabase_client
 from ui.theme import (
     COLOR_PRIMARY, COLOR_PRIMARY_LIGHT, COLOR_SURFACE, COLOR_BORDER,
-    COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, get_theme_colors, get_card_shadow
+    COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, get_theme_colors, get_card_shadow,
+    is_compact_width,
 )
 from ui.state import AppState
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
@@ -653,6 +654,7 @@ class AuthView:
         tabs = ft.Tabs(
             selected_index=initial_tab,
             length=4,
+            animation_duration=ft.Duration(milliseconds=250),
             content=ft.Column(
                 expand=True,
                 controls=[
@@ -675,7 +677,9 @@ class AuthView:
             expand=True
         )
 
-        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
+        raw_width = getattr(self.page, "width", None)
+        width = raw_width if isinstance(raw_width, (int, float)) else 0
+        is_compact = is_compact_width(raw_width)
 
         card_header = ft.Container(
             content=ft.Row(
@@ -732,7 +736,7 @@ class AuthView:
                 ),
                 bgcolor=colors["bg"],
                 expand=True,
-                padding=12
+                padding=12 if width < 430 else 18
             )
 
         # Desktop layout: Side-by-side campus hero panel + elevated glass login card
@@ -745,20 +749,21 @@ class AuthView:
         return ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.ResponsiveRow(
-                        controls=[
-                            desktop_hero,
-                            auth_card
-                        ],
-                        spacing=20,
-                        run_spacing=20,
-                        vertical_alignment=ft.CrossAxisAlignment.START
+                    ft.Container(
+                        content=ft.ResponsiveRow(
+                            controls=[desktop_hero, auth_card],
+                            spacing=20,
+                            run_spacing=20,
+                            vertical_alignment=ft.CrossAxisAlignment.START,
+                        ),
+                        width=1500 if width > 1600 else None,
                     )
                 ],
                 scroll=ft.ScrollMode.AUTO,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 expand=True
             ),
             bgcolor=colors["bg"],
             expand=True,
-            padding=ft.padding.symmetric(horizontal=24, vertical=16)
+            padding=ft.padding.symmetric(horizontal=24 if width < 1440 else 48, vertical=24)
         )

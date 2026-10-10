@@ -16,7 +16,8 @@ from services.cache_service import CacheService
 from database.supabase_client import get_supabase_client
 from ui.theme import (
     COLOR_PRIMARY, COLOR_SURFACE, COLOR_BORDER, COLOR_TEXT_PRIMARY,
-    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow
+    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow,
+    is_compact_width,
 )
 from ui.state import AppState
 from ui.components.college_hero import create_dashboard_welcome_banner
@@ -233,7 +234,7 @@ class StaffView:
             except Exception:
                 campus_overview_card = None
 
-        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
+        is_compact = is_compact_width(getattr(self.page, "width", None))
         welcome_banner = create_dashboard_welcome_banner(
             user_name=self.staff.get('full_name', 'Faculty Member'),
             role_text=f"{self.role} ({self.department_code or 'Campus-wide'})",
@@ -851,7 +852,7 @@ class StaffView:
 
         is_mobile_initial = bool(
             getattr(self.page, "navigation_bar", None) is not None
-            or (getattr(self.page, "width", None) is not None and self.page.width < 768)
+            or is_compact_width(getattr(self.page, "width", None))
         )
 
         scrollable_table = ft.Row(
@@ -917,7 +918,7 @@ class StaffView:
 
             is_mobile = bool(
                 getattr(self.page, "navigation_bar", None) is not None
-                or (getattr(self.page, "width", None) is not None and self.page.width < 768)
+                or is_compact_width(getattr(self.page, "width", None))
             )
 
             if not is_mobile:
