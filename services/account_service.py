@@ -88,7 +88,7 @@ class AccountService:
         table_name = "students" if role == UserRole.STUDENT.value else "staff_users"
 
         try:
-            res = client.table(table_name).select("id, password_hash").eq("id", user_id).execute()
+            res = client.table(table_name).select("id, password_hash, security_question").eq("id", user_id).execute()
             if not res.data or len(res.data) == 0:
                 return False, "Account not found."
 
@@ -97,9 +97,23 @@ class AccountService:
                 return False, "Incorrect current password."
 
             new_hash = hash_password(new_password)
-            client.table(table_name).update({
+            update_payload: Dict[str, Any] = {
                 "password_hash": new_hash
-            }).eq("id", user_id).execute()
+            }
+            if role == UserRole.STUDENT.value:
+                update_payload["must_change_password"] = False
+                sq = str(user.get("security_question") or "")
+                if sq.startswith("RESET_REQUIRED:"):
+                    update_payload["security_question"] = sq[len("RESET_REQUIRED:"):]
+
+            try:
+                client.table(table_name).update(update_payload).eq("id", user_id).execute()
+            except Exception as up_err:
+                if role == UserRole.STUDENT.value and ("must_change_password" in str(up_err).lower() or "column" in str(up_err).lower()):
+                    fallback_payload = {k: v for k, v in update_payload.items() if k != "must_change_password"}
+                    client.table(table_name).update(fallback_payload).eq("id", user_id).execute()
+                else:
+                    raise up_err
 
             try:
                 client.table("audit_logs").insert({
@@ -169,7 +183,10 @@ class AccountService:
                     if not actor_res.data or not actor_res.data[0].get("is_active"):
                         return False, "Unauthorized or inactive HOD account."
                     hod_dept = actor_res.data[0].get("department_id")
-                    if target_role != UserRole.COORDINATOR.value or str(target_dept) != str(hod_dept):
+                    from services.cache_service import CacheService
+                    canonical_target_dept = CacheService.validate_and_canonicalize_department_id(target_dept)
+                    canonical_hod_dept = CacheService.validate_and_canonicalize_department_id(hod_dept)
+                    if target_role != UserRole.COORDINATOR.value or not canonical_target_dept or not canonical_hod_dept or canonical_target_dept != canonical_hod_dept:
                         return False, "HOD can only manage Coordinators in their own department."
                 elif actor_role == UserRole.PRINCIPAL.value:
                     if target_role not in (UserRole.HOD.value, UserRole.HOSTEL_INCHARGE.value, UserRole.COORDINATOR.value):
@@ -238,7 +255,10 @@ class AccountService:
                 if not actor_res.data or not actor_res.data[0].get("is_active"):
                     return False, "Unauthorized or inactive HOD account."
                 hod_dept = actor_res.data[0].get("department_id")
-                if target_role != UserRole.COORDINATOR.value or str(target_dept) != str(hod_dept):
+                from services.cache_service import CacheService
+                canonical_target_dept = CacheService.validate_and_canonicalize_department_id(target_dept)
+                canonical_hod_dept = CacheService.validate_and_canonicalize_department_id(hod_dept)
+                if target_role != UserRole.COORDINATOR.value or not canonical_target_dept or not canonical_hod_dept or canonical_target_dept != canonical_hod_dept:
                     return False, "HOD can only manage Coordinators in their own department."
             elif actor_role == UserRole.PRINCIPAL.value:
                 pass
@@ -332,7 +352,10 @@ class AccountService:
             if coord.get("role") != UserRole.COORDINATOR.value:
                 return False, "HOD can only reset Coordinator passwords."
 
-            if str(coord.get("department_id")) != str(hod.get("department_id")):
+            from services.cache_service import CacheService
+            canonical_hod_dept = CacheService.validate_and_canonicalize_department_id(hod.get("department_id"))
+            canonical_coord_dept = CacheService.validate_and_canonicalize_department_id(coord.get("department_id"))
+            if not canonical_hod_dept or not canonical_coord_dept or canonical_hod_dept != canonical_coord_dept:
                 return False, "HOD can only reset passwords for Coordinators in their own department."
 
             new_hash = hash_password(new_password)
@@ -514,40 +537,249 @@ class AccountService:
             return False, "Unable to reset Hostel Incharge password. Please try again."
 
     # -------------------------------------------------------------------------
-    # COORDINATOR: STUDENT PASSWORD RESET & MANAGEMENT
+    # STUDENT ACCOUNT MANAGEMENT: ROLE-SCOPED OVERSIGHT & PASSWORD RESETS
     # -------------------------------------------------------------------------
     @classmethod
-    def list_department_students_for_coordinator(cls, coordinator_id: str) -> List[Dict[str, Any]]:
+    def list_students_for_staff(
+        cls,
+        staff_id: str,
+        department_id: Optional[str] = None,
+        search_query: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
-        Lists students belonging STRICTLY to the coordinator's academic department,
-        excluding other departments and excluding First Year general students.
+        Lists registered student accounts strictly within the staff member's authorized scope:
+        - Coordinator: strictly actor's department (excluding First Year / FE).
+        - Other roles (HOD, Principal, Hostel Incharge, Library Incharge, Student): strictly forbidden.
+
+        Never returns password hashes or security answer credentials.
         """
         client = get_trusted_backend_client()
         try:
-            c_res = client.table("staff_users").select("id, role, department_id, is_active").eq("id", coordinator_id).execute()
-            if not c_res.data or len(c_res.data) == 0:
+            # 1. Fetch acting staff
+            s_res = client.table("staff_users").select("id, role, department_id, is_active, is_locked").eq("id", staff_id).execute()
+            if not s_res.data or len(s_res.data) == 0:
                 return []
-            coord = c_res.data[0]
-            if coord.get("role") != UserRole.COORDINATOR.value or not coord.get("is_active"):
-                return []
-            dept_id = coord.get("department_id")
-            if not dept_id:
+            staff = s_res.data[0]
+            if not staff.get("is_active") or staff.get("is_locked"):
                 return []
 
-            res = client.table("students").select(
+            role = staff.get("role")
+            actor_dept_id = staff.get("department_id")
+
+            # Under approved policy, only Academic Coordinators manage departmental students
+            if role != UserRole.COORDINATOR.value:
+                return []
+
+            from services.cache_service import CacheService
+            if not actor_dept_id:
+                return []
+            canonical_actor_dept = CacheService.validate_and_canonicalize_department_id(actor_dept_id)
+            if not canonical_actor_dept:
+                return []
+
+            # 2. Query students strictly in coordinator's department
+            query = client.table("students").select(
                 "id, roll_number, full_name, department_id, year, is_hostel, is_locked, created_at, departments(code, name)"
-            ).eq("department_id", dept_id).order("roll_number", desc=False).execute()
+            ).eq("department_id", canonical_actor_dept).order("roll_number", desc=False)
 
+            res = query.execute()
             students = res.data or []
-            # Exclude First Year students (who belong to General Department)
-            valid_students = [
-                s for s in students
-                if str(s.get("year", "")).strip().upper() not in ("FE", "1", "1ST", "FIRST YEAR", "FIRST")
-            ]
-            return valid_students
+
+            # 3. Exclude First Year students (who belong to General Department)
+            filtered = []
+            for s in students:
+                st_year = str(s.get("year", "")).strip().upper()
+                if st_year in ("FE", "1", "1ST", "FIRST YEAR", "FIRST"):
+                    continue
+
+                if not s.get("departments") or not isinstance(s.get("departments"), dict):
+                    d_info = CacheService.get_department_by_id(s.get("department_id"))
+                    if d_info:
+                        s["departments"] = {"code": d_info.get("code"), "name": d_info.get("name")}
+
+                filtered.append(s)
+
+            # 4. Search query filter
+            if search_query and search_query.strip():
+                sq = search_query.strip().lower()
+                filtered = [
+                    s for s in filtered
+                    if sq in str(s.get("roll_number", "")).lower() or sq in str(s.get("full_name", "")).lower()
+                ]
+
+            # 5. Sanitize (strip any credential artifacts)
+            sanitized = []
+            for s in filtered:
+                clean = {
+                    "id": s.get("id"),
+                    "roll_number": s.get("roll_number"),
+                    "full_name": s.get("full_name"),
+                    "department_id": s.get("department_id"),
+                    "year": s.get("year"),
+                    "is_hostel": s.get("is_hostel"),
+                    "is_locked": s.get("is_locked"),
+                    "created_at": s.get("created_at"),
+                    "departments": s.get("departments")
+                }
+                sanitized.append(clean)
+
+            return sanitized
         except Exception as ex:
-            logger.error("Error listing department students for coordinator: %s", ex)
+            logger.error("Error listing students for staff: %s", ex)
             return []
+
+    @classmethod
+    def reset_student_password_by_staff(
+        cls,
+        staff_id: str,
+        student_id: str,
+        new_password: str
+    ) -> Tuple[bool, str]:
+        """
+        Allows authorized Coordinator to reset a student's password:
+        - Coordinator: strictly own department students (excluding First Year).
+        - HOD, Principal, Hostel In-Charge, Library In-Charge, Student: strictly rejected.
+
+        Validates password complexity, unlocks account, resets failed attempts,
+        and writes an audit log entry.
+        Never alters security_question so account recovery is never damaged.
+        Never exposes or logs plaintext passwords.
+        """
+        pw_ok, pw_err = validate_password_strength(new_password)
+        if not pw_ok:
+            return False, pw_err
+
+        client = get_trusted_backend_client()
+        try:
+            # 1. Verify acting staff
+            staff_res = client.table("staff_users").select("id, role, department_id, is_active, is_locked").eq("id", staff_id).execute()
+            if not staff_res.data or len(staff_res.data) == 0:
+                return False, "Unauthorized staff account."
+            staff = staff_res.data[0]
+            if not staff.get("is_active") or staff.get("is_locked"):
+                return False, "Unauthorized: Staff account is locked or inactive."
+
+            actor_role = staff.get("role")
+            actor_dept_id = staff.get("department_id")
+
+            # 2. Strict role authorization: Only Coordinator can reset student passwords
+            if actor_role != UserRole.COORDINATOR.value:
+                try:
+                    client.table("audit_logs").insert({
+                        "event_type": "UNAUTHORIZED_STUDENT_PASSWORD_RESET_ATTEMPT",
+                        "actor_id": staff_id,
+                        "actor_role": actor_role,
+                        "metadata": {
+                            "target_student_id": student_id,
+                            "reason": f"Role {actor_role} is not authorized to reset student passwords under approved policy"
+                        }
+                    }).execute()
+                except Exception:
+                    pass
+                return False, f"Unauthorized: {actor_role} is not permitted to reset student passwords."
+
+            # 3. Retrieve target student by immutable database UUID
+            s_res = client.table("students").select(
+                "id, roll_number, full_name, department_id, year"
+            ).eq("id", student_id).execute()
+            if not s_res.data or len(s_res.data) == 0:
+                return False, "Student account not found."
+            student = s_res.data[0]
+
+            student_dept_id = str(student.get("department_id") or "")
+            st_year = str(student.get("year", "")).strip().upper()
+            is_fe = st_year in ("FE", "1", "1ST", "FIRST YEAR", "FIRST")
+
+            from services.cache_service import CacheService
+            canonical_actor_dept = CacheService.validate_and_canonicalize_department_id(actor_dept_id)
+            canonical_student_dept = CacheService.validate_and_canonicalize_department_id(student_dept_id)
+
+            # 4. Enforce strict department boundary (fail closed if either department is missing or unrecognized)
+            if not canonical_actor_dept or not canonical_student_dept:
+                try:
+                    client.table("audit_logs").insert({
+                        "event_type": "UNAUTHORIZED_STUDENT_PASSWORD_RESET_ATTEMPT",
+                        "actor_id": staff_id,
+                        "actor_role": actor_role,
+                        "metadata": {
+                            "target_student_id": student_id,
+                            "target_roll": student.get("roll_number"),
+                            "target_dept": student_dept_id,
+                            "actor_dept": actor_dept_id,
+                            "reason": "Missing or unrecognized department identifier during Coordinator reset"
+                        }
+                    }).execute()
+                except Exception:
+                    pass
+                return False, "Unauthorized: Both Coordinator and Student must have valid, assigned academic departments."
+
+            if canonical_actor_dept != canonical_student_dept:
+                try:
+                    client.table("audit_logs").insert({
+                        "event_type": "UNAUTHORIZED_STUDENT_PASSWORD_RESET_ATTEMPT",
+                        "actor_id": staff_id,
+                        "actor_role": actor_role,
+                        "metadata": {
+                            "target_student_id": student_id,
+                            "target_roll": student.get("roll_number"),
+                            "target_dept": canonical_student_dept,
+                            "actor_dept": canonical_actor_dept,
+                            "reason": "Cross-department student password reset attempt by Coordinator"
+                        }
+                    }).execute()
+                except Exception:
+                    pass
+                return False, "Unauthorized: Coordinator can only reset passwords for students in their own academic department."
+
+            # 5. Enforce First Year boundary
+            if is_fe:
+                return False, "Unauthorized: First Year student accounts are managed by the General Department, not Academic Coordinators."
+
+            # 6. Execute secure password reset with must_change_password=True
+            new_hash = hash_password(new_password)
+            update_payload: Dict[str, Any] = {
+                "password_hash": new_hash,
+                "is_locked": False,
+                "failed_login_attempts": 0,
+                "locked_at": None,
+                "must_change_password": True
+            }
+
+            try:
+                client.table("students").update(update_payload).eq("id", student_id).execute()
+            except Exception as up_err:
+                err_str = str(up_err).lower()
+                if "must_change_password" in err_str or "column" in err_str:
+                    logger.error("Database migration 009 pending: 'must_change_password' column missing from students table.")
+                    return False, "Cannot reset password: database migration 009 is pending. The 'must_change_password' column must exist in Supabase before mandatory password resets can be performed."
+                logger.error("Database error updating student password: %s", up_err)
+                return False, "Unable to reset student password due to a database error. Please try again."
+
+            # 7. Audit Log (Never log plaintext password)
+            try:
+                client.table("audit_logs").insert({
+                    "event_type": "STUDENT_PASSWORD_RESET_BY_STAFF",
+                    "actor_id": staff_id,
+                    "actor_role": actor_role,
+                    "metadata": {
+                        "target_student_id": student_id,
+                        "roll_number": student.get("roll_number"),
+                        "department_id": canonical_student_dept,
+                        "action": "password_reset_and_unlock"
+                    }
+                }).execute()
+            except Exception:
+                pass
+
+            return True, f"Password for student {student.get('roll_number')} reset successfully. Account unlocked."
+        except Exception as ex:
+            logger.error("Error resetting student password by staff: %s", ex)
+            return False, "Unable to reset student password. Please try again."
+
+    @classmethod
+    def list_department_students_for_coordinator(cls, coordinator_id: str) -> List[Dict[str, Any]]:
+        """Legacy alias: delegates to list_students_for_staff."""
+        return cls.list_students_for_staff(coordinator_id)
 
     @classmethod
     def reset_student_password_by_coordinator(
@@ -556,82 +788,8 @@ class AccountService:
         student_id: str,
         new_password: str
     ) -> Tuple[bool, str]:
-        """
-        Allows a Coordinator to reset password for a student belonging strictly to their
-        own academic department (excluding other departments and first-year general students).
-        Sets temporary password, unlocks account, forces password change on next login,
-        and logs to audit trail without storing the password.
-        """
-        pw_ok, pw_err = validate_password_strength(new_password)
-        if not pw_ok:
-            return False, pw_err
-
-        client = get_trusted_backend_client()
-        try:
-            # 1. Verify Coordinator
-            c_res = client.table("staff_users").select("id, role, department_id, is_active").eq("id", coordinator_id).execute()
-            if not c_res.data or len(c_res.data) == 0:
-                return False, "Unauthorized Coordinator account."
-            coord = c_res.data[0]
-            if coord.get("role") != UserRole.COORDINATOR.value or not coord.get("is_active"):
-                return False, "Unauthorized or inactive Coordinator account."
-            dept_id = coord.get("department_id")
-            if not dept_id:
-                return False, "Coordinator does not have an assigned academic department."
-
-            # 2. Verify Student
-            s_res = client.table("students").select("id, roll_number, department_id, year, security_question").eq("id", student_id).execute()
-            if not s_res.data or len(s_res.data) == 0:
-                return False, "Student account not found."
-            student = s_res.data[0]
-
-            # Enforce department boundary
-            if str(student.get("department_id")) != str(dept_id):
-                return False, "Unauthorized: Coordinator can only reset passwords for students in their own academic department."
-
-            # Enforce First Year boundary
-            st_year = str(student.get("year", "")).strip().upper()
-            if st_year in ("FE", "1", "1ST", "FIRST YEAR", "FIRST"):
-                return False, "Unauthorized: First Year student accounts are managed by the General Department, not Academic Coordinators."
-
-            # 3. Hash password and update student
-            new_hash = hash_password(new_password)
-            update_payload: Dict[str, Any] = {
-                "password_hash": new_hash,
-                "is_locked": False,
-                "failed_login_attempts": 0,
-                "locked_at": None
-            }
-
-            # Try updating must_change_password column; fallback to security_question prefix if not in schema
-            sq = student.get("security_question", "")
-            if not sq.startswith("RESET_REQUIRED:"):
-                update_payload["security_question"] = f"RESET_REQUIRED:{sq}"
-
-            try:
-                client.table("students").update(dict(update_payload, must_change_password=True)).eq("id", student_id).execute()
-            except Exception:
-                client.table("students").update(update_payload).eq("id", student_id).execute()
-
-            # 4. Audit Log without storing plaintext password
-            try:
-                client.table("audit_logs").insert({
-                    "event_type": "COORDINATOR_STUDENT_PASSWORD_RESET",
-                    "actor_id": coordinator_id,
-                    "actor_role": UserRole.COORDINATOR.value,
-                    "metadata": {
-                        "target_student_id": student_id,
-                        "roll_number": student.get("roll_number"),
-                        "action": "password_reset_and_unlock"
-                    }
-                }).execute()
-            except Exception:
-                pass
-
-            return True, f"Password for student ({student.get('roll_number')}) reset successfully. Account unlocked."
-        except Exception as ex:
-            logger.error("Error resetting student password by coordinator: %s", ex)
-            return False, "Unable to reset student password. Please try again."
+        """Legacy alias: delegates to reset_student_password_by_staff."""
+        return cls.reset_student_password_by_staff(coordinator_id, student_id, new_password)
 
     # -------------------------------------------------------------------------
     # PRINCIPAL: LIBRARY INCHARGE & GENERAL HOD MANAGEMENT

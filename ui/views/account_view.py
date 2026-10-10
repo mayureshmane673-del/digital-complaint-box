@@ -10,6 +10,8 @@ ui/views/account_view.py: Comprehensive Account Management view supporting:
 
 from typing import Callable, Optional, Dict, Any, List
 import flet as ft
+import secrets
+import string
 
 from services.account_service import AccountService
 from ui.theme import (
@@ -19,6 +21,31 @@ from ui.theme import (
 from ui.state import AppState
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
 from models.user import UserRole
+
+
+def generate_secure_temporary_password(length: int = 12) -> str:
+    """
+    Generates a cryptographically strong, unique temporary password conforming to complexity rules:
+    - Minimum 8 characters (default 12)
+    - At least one uppercase letter
+    - At least one lowercase letter
+    - At least one number
+    - At least one special character (!@#$%^&*)
+    """
+    if not isinstance(length, int) or length < 8:
+        length = 12
+
+    upper = secrets.choice(string.ascii_uppercase)
+    lower = secrets.choice(string.ascii_lowercase)
+    digit = secrets.choice(string.digits)
+    special = secrets.choice("!@#$%^&*")
+    all_chars = string.ascii_letters + string.digits + "!@#$%^&*"
+    remaining = [secrets.choice(all_chars) for _ in range(max(length - 4, 4))]
+    chars = [upper, lower, digit, special] + remaining
+    for i in range(len(chars) - 1, 0, -1):
+        j = secrets.randbelow(i + 1)
+        chars[i], chars[j] = chars[j], chars[i]
+    return "".join(chars)
 
 
 class AccountView:
@@ -47,7 +74,7 @@ class AccountView:
 
         # Role-specific subordinate management sections
         if self.role == UserRole.COORDINATOR.value:
-            sections.append(self._render_coordinator_student_management(colors, is_dark))
+            sections.append(self._render_student_account_management(colors, is_dark))
         elif self.role == UserRole.HOD.value:
             sections.append(self._render_hod_coordinator_management(colors, is_dark))
         elif self.role == UserRole.PRINCIPAL.value:
@@ -820,10 +847,12 @@ class AccountView:
         )
 
     # -------------------------------------------------------------------------
-    # SECTION 7: COORDINATOR STUDENT PASSWORD RESET & MANAGEMENT
+    # SECTION 7: STUDENT ACCOUNT MANAGEMENT
     # -------------------------------------------------------------------------
-    def _render_coordinator_student_management(self, colors: Dict[str, str], is_dark: bool) -> ft.Control:
-        students = AccountService.list_department_students_for_coordinator(self.user_id)
+    def _render_student_account_management(self, colors: Dict[str, str], is_dark: bool) -> ft.Control:
+        students_cache = []
+
+        sub_text = "Department student management: View registered students in your department (excluding First Year) and reset credentials."
 
         search_field = ft.TextField(
             hint_text="Search students by roll number or name...",
@@ -834,20 +863,33 @@ class AccountView:
 
         table_rows_container = ft.Column(spacing=6)
 
-        def make_student_reset_dialog(s_id: str, s_roll: str, s_name: str):
+        def make_student_reset_dialog(s_id: str, s_roll: str, s_name: str, s_dept_code: str):
             def open_dialog_handler(e):
+                unique_temp_pw = generate_secure_temporary_password()
                 new_pw_field = ft.TextField(
                     label="Temporary Password",
-                    value="Temp@2026!",
-                    password=True,
+                    value=unique_temp_pw,
+                    password=False,
                     can_reveal_password=True,
-                    dense=True
+                    dense=True,
+                    expand=True,
+                    helper_text="Auto-generated secure password. You may edit or regenerate."
+                )
+
+                def regenerate_pw(e_reg):
+                    new_pw_field.value = generate_secure_temporary_password()
+                    self.page.update()
+
+                regen_btn = ft.IconButton(
+                    icon=ft.Icons.AUTORENEW,
+                    tooltip="Generate another secure password",
+                    on_click=regenerate_pw
                 )
 
                 def do_reset(e_rst):
                     p1 = (new_pw_field.value or "").strip()
                     close_dialog(self.page, dlg)
-                    ok, msg = AccountService.reset_student_password_by_coordinator(self.user_id, s_id, p1)
+                    ok, msg = AccountService.reset_student_password_by_staff(self.user_id, s_id, p1)
                     if ok:
                         info_dlg = ft.AlertDialog(
                             title=ft.Row(
@@ -859,14 +901,20 @@ class AccountView:
                             ),
                             content=ft.Column(
                                 controls=[
-                                    ft.Text(f"Password for student {s_name} ({s_roll}) has been reset.", size=13),
+                                    ft.Text(f"Password for student {s_name} ({s_roll} - {s_dept_code}) has been reset.", size=13),
                                     ft.Container(
-                                        content=ft.Text(f"Temporary Password: {p1}", weight=ft.FontWeight.BOLD, size=14, color=colors["primary"]),
+                                        content=ft.Column(
+                                            controls=[
+                                                ft.Text("Temporary Password:", size=11, color=colors["text_muted"]),
+                                                ft.Text(f"{p1}", weight=ft.FontWeight.BOLD, size=15, color=colors["primary"], selectable=True),
+                                            ],
+                                            spacing=2
+                                        ),
                                         bgcolor=ft.Colors.with_opacity(0.1, colors["primary"]),
                                         border_radius=8,
                                         padding=12
                                     ),
-                                    ft.Text("The student will be required to change this password on next login.", size=12, color=colors["text_muted"])
+                                    ft.Text("The account has been unlocked. Provide this temporary password securely to the student.", size=12, color=colors["text_muted"])
                                 ],
                                 spacing=10,
                                 tight=True
@@ -876,19 +924,22 @@ class AccountView:
                             ]
                         )
                         open_dialog(self.page, info_dlg)
-                        if self.on_refresh:
-                            self.on_refresh()
-                        else:
-                            self.page.update()
+                        load_and_render_students()
                     else:
                         show_feedback_message(self.page, msg, is_error=True)
 
                 dlg = ft.AlertDialog(
-                    title=ft.Text(f"Reset Password for {s_roll}", size=16, weight=ft.FontWeight.BOLD),
+                    title=ft.Text(f"Reset Password for {s_roll} ({s_dept_code})", size=16, weight=ft.FontWeight.BOLD),
                     content=ft.Column(
                         controls=[
-                            ft.Text(f"Reset credentials for {s_name} ({s_roll}). Account will be unlocked and must change password on login.", size=12, color=colors["text_muted"]),
-                            new_pw_field
+                            ft.Text(f"Reset credentials for {s_name} ({s_roll} - {s_dept_code}). Account will be unlocked.", size=12, color=colors["text_muted"]),
+                            ft.Row(
+                                controls=[
+                                    new_pw_field,
+                                    regen_btn
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                            )
                         ],
                         spacing=10,
                         tight=True
@@ -901,13 +952,16 @@ class AccountView:
                 open_dialog(self.page, dlg)
             return open_dialog_handler
 
-        def render_table():
+        def filter_and_render():
             q = (search_field.value or "").strip().lower()
-            filtered = [s for s in students if not q or q in s.get("roll_number", "").lower() or q in s.get("full_name", "").lower()]
+            filtered = [
+                s for s in students_cache
+                if not q or q in s.get("roll_number", "").lower() or q in s.get("full_name", "").lower()
+            ]
 
             if not filtered:
                 table_rows_container.controls = [
-                    ft.Text("No departmental students found matching search.", italic=True, size=13, color=colors["text_muted"])
+                    ft.Text("No students found matching current criteria.", italic=True, size=13, color=colors["text_muted"])
                 ]
             else:
                 rows = []
@@ -916,6 +970,8 @@ class AccountView:
                     s_roll = s.get("roll_number", "")
                     s_name = s.get("full_name", "")
                     s_year = s.get("year", "")
+                    dept_info = s.get("departments") or {}
+                    dept_code = dept_info.get("code") if isinstance(dept_info, dict) else "Dept"
                     is_locked = s.get("is_locked", False)
                     status_str = "Locked" if is_locked else "Active"
                     status_col = "#ef4444" if is_locked else "#10b981"
@@ -929,14 +985,20 @@ class AccountView:
                                             ft.Text(s_roll, weight=ft.FontWeight.BOLD, size=13, color=colors["text"]),
                                             ft.Text(f"— {s_name}", size=13, color=colors["text"]),
                                             ft.Container(
-                                                content=ft.Text(s_year or "—", size=11, color=colors["primary"]),
-                                                bgcolor=ft.Colors.with_opacity(0.1, colors["primary"]),
+                                                content=ft.Text(dept_code or "—", size=11, color=colors["primary"], weight=ft.FontWeight.BOLD),
+                                                bgcolor=ft.Colors.with_opacity(0.12, colors["primary"]),
+                                                border_radius=6,
+                                                padding=ft.padding.symmetric(horizontal=8, vertical=2)
+                                            ),
+                                            ft.Container(
+                                                content=ft.Text(s_year or "—", size=11, color=colors["text_muted"]),
+                                                bgcolor=ft.Colors.with_opacity(0.08, colors["text_muted"]),
                                                 border_radius=6,
                                                 padding=ft.padding.symmetric(horizontal=6, vertical=2)
                                             ),
                                             ft.Container(
                                                 content=ft.Text(status_str, size=11, color=status_col, weight=ft.FontWeight.BOLD),
-                                                bgcolor=ft.Colors.with_opacity(0.1, status_col),
+                                                bgcolor=ft.Colors.with_opacity(0.12, status_col),
                                                 border_radius=6,
                                                 padding=ft.padding.symmetric(horizontal=6, vertical=2)
                                             )
@@ -948,7 +1010,7 @@ class AccountView:
                                         "Reset Password",
                                         icon=ft.Icons.LOCK_RESET,
                                         style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=10, vertical=4)),
-                                        on_click=make_student_reset_dialog(s_id, s_roll, s_name)
+                                        on_click=make_student_reset_dialog(s_id, s_roll, s_name, dept_code)
                                     )
                                 ],
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -962,8 +1024,24 @@ class AccountView:
                 table_rows_container.controls = rows
             self.page.update()
 
-        search_field.on_change = lambda _: render_table()
-        render_table()
+        def load_and_render_students():
+            nonlocal students_cache
+            students_cache = AccountService.list_students_for_staff(self.user_id)
+            filter_and_render()
+
+        search_field.on_change = lambda _: filter_and_render()
+
+        controls_header = [
+            ft.Row(
+                controls=[
+                    search_field,
+                    ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Refresh", on_click=lambda _: load_and_render_students())
+                ],
+                spacing=10
+            )
+        ]
+
+        load_and_render_students()
 
         return ft.Container(
             content=ft.Column(
@@ -971,12 +1049,12 @@ class AccountView:
                     ft.Row(
                         controls=[
                             ft.Icon(ft.Icons.SCHOOL, color=colors["primary"], size=22),
-                            ft.Text("Department Student Password Management", size=16, weight=ft.FontWeight.BOLD, color=colors["text"])
+                            ft.Text("Student Account Management", size=16, weight=ft.FontWeight.BOLD, color=colors["text"])
                         ],
                         spacing=8
                     ),
-                    ft.Text("Coordinators can reset student passwords strictly within their department (excluding First Year).", size=12, color=colors["text_muted"]),
-                    search_field,
+                    ft.Text(sub_text, size=12, color=colors["text_muted"]),
+                    *controls_header,
                     table_rows_container
                 ],
                 spacing=12
@@ -986,6 +1064,9 @@ class AccountView:
             border_radius=12,
             padding=16
         )
+
+    # Backward compatibility alias
+    _render_coordinator_student_management = _render_student_account_management
 
     # -------------------------------------------------------------------------
     # SECTION 8: PRINCIPAL LIBRARY INCHARGE OVERSIGHT

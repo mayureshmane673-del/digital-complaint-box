@@ -171,6 +171,64 @@ def main(page: ft.Page):
         w = page.width or 1000
         return w < 768
 
+    def render_force_password_change_view():
+        user = AppState.current_user
+        if not user:
+            render_auth_view()
+            return
+
+        from ui.flet_compat import clear_all_dialogs
+        clear_all_dialogs(page)
+
+        is_dark = AppState.is_dark_mode
+        colors = get_theme_colors(is_dark)
+        page.bgcolor = colors["bg"]
+        page.theme = create_app_theme(is_dark=is_dark)
+        page.theme_mode = ft.ThemeMode.DARK if is_dark else ft.ThemeMode.LIGHT
+
+        # Strip navigation rails/bars so student cannot bypass
+        page.navigation_bar = None
+        current_nav_rail[0] = None
+
+        page.appbar = ft.AppBar(
+            leading=ft.Icon(ft.Icons.SECURITY, color=ft.Colors.WHITE),
+            title=ft.Text("Password Change Required", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+            bgcolor=COLOR_PRIMARY,
+            actions=[
+                ft.IconButton(
+                    icon=ft.Icons.LOGOUT,
+                    icon_color=ft.Colors.WHITE,
+                    tooltip="Sign Out",
+                    on_click=lambda _: on_logout()
+                )
+            ]
+        )
+
+        from ui.views.force_password_change_view import ForcePasswordChangeView
+
+        def on_password_changed():
+            # Update user session state
+            user["must_change_password"] = False
+            if AppState.current_user:
+                AppState.current_user["must_change_password"] = False
+            save_auth_session(page, user, UserRole.STUDENT.value)
+            # Proceed to student dashboard
+            render_portal_view(initial_tab=0)
+
+        fpc_view = ForcePasswordChangeView(
+            page=page,
+            user=user,
+            on_password_changed=on_password_changed,
+            on_logout=on_logout
+        )
+        current_active_view[0] = None
+        content_container = fpc_view.render()
+        current_portal_content[0] = content_container
+
+        page.clean()
+        page.add(content_container)
+        page.update()
+
     def render_portal_view(initial_tab: Optional[int] = None):
         user = AppState.current_user
         role = AppState.role
@@ -181,6 +239,11 @@ def main(page: ft.Page):
 
         from ui.flet_compat import clear_all_dialogs
         clear_all_dialogs(page)
+
+        # Enforce mandatory password change for students before dashboard access
+        if role == UserRole.STUDENT.value and user.get("must_change_password"):
+            render_force_password_change_view()
+            return
 
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
@@ -298,6 +361,8 @@ def main(page: ft.Page):
                 if current_portal_content[0]:
                     current_portal_content[0].padding = 12 if compact else 24
                 page.update()
+        elif AppState.current_user and AppState.current_user.get("must_change_password"):
+            render_force_password_change_view()
         elif not AppState.current_user:
             if not hasattr(page, "_last_auth_compact") or page._last_auth_compact != compact:
                 page._last_auth_compact = compact
@@ -338,7 +403,7 @@ def main(page: ft.Page):
                     save_auth_session(page, u, "Student")
                     AppState.set_user(u, "Student")
                     render_portal_view(initial_tab=tab_p)
-                    if params.get("detail") == ["1"]:
+                    if not u.get("must_change_password") and params.get("detail") == ["1"]:
                         from ui.components.complaint_detail import show_complaint_detail_dialog
                         from services.complaint_service import ComplaintService
                         cmps = ComplaintService.get_complaints_for_user(role="Student", user_id=u["id"], department_id=u.get("department_id"))

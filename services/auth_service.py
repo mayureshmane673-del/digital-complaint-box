@@ -239,10 +239,12 @@ class AuthService:
         student["failed_login_attempts"] = 0
         student["is_locked"] = False
 
-        # Check must_change_password flag or reset marker
+        # Check must_change_password flag (primary column or legacy RESET_REQUIRED: marker)
         sq = str(student.get("security_question") or "")
-        if student.get("must_change_password") or sq.startswith("RESET_REQUIRED:"):
-            student["must_change_password"] = True
+        has_legacy_marker = sq.startswith("RESET_REQUIRED:")
+        student["must_change_password"] = bool(student.get("must_change_password", False)) or has_legacy_marker
+        if has_legacy_marker:
+            student["security_question"] = sq[len("RESET_REQUIRED:"):]
 
         return True, "Login successful.", sanitize_user_dict(student)
 
@@ -260,7 +262,9 @@ class AuthService:
             return False, "Account not found.", None
         if not res.data or len(res.data) == 0:
             return False, "Account not found.", None
-        return True, "", res.data[0].get("security_question")
+        raw_q = res.data[0].get("security_question")
+        clean_q = raw_q[len("RESET_REQUIRED:"):] if raw_q and raw_q.startswith("RESET_REQUIRED:") else raw_q
+        return True, "", clean_q
 
     @classmethod
     def reset_student_password(

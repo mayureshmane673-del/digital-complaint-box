@@ -61,6 +61,7 @@ ALLOWED_USER_KEYS = {
     "is_hostel_approved",
     "role",
     "designation",
+    "must_change_password",
 }
 
 ALLOWED_DRAFT_KEYS = {

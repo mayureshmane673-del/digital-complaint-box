@@ -12,13 +12,14 @@ from collections import defaultdict
 
 class CacheService:
     _lock = threading.RLock()
+    _dept_refresh_lock = threading.Lock()
 
     DEFAULT_DEPARTMENTS: List[Dict[str, Any]] = [
         {"id": "f4e141ef-14ca-44e4-a1ed-051ee0525419", "code": "CSE", "name": "Computer Science and Engineering"},
-        {"id": "06059c36-8a03-4f9e-9086-1d116a3bc533", "code": "AIDS", "name": "Artificial Intelligence and Data Science"},
-        {"id": "a90df03a-3243-4ce2-bdf1-3312c5b3d6f1", "code": "E&TC", "name": "Electronics and Telecommunication Engineering"},
-        {"id": "d05fe7ee-bfcf-41c3-8be2-72abcb71b802", "code": "MECH", "name": "Mechanical Engineering"},
-        {"id": "517fc5e3-cf9d-4340-9a4f-a2e6f4770176", "code": "Civil", "name": "Civil Engineering"},
+        {"id": "067bc0be-bd8c-47ce-a520-b3e93407deb8", "code": "AIDS", "name": "Artificial Intelligence and Data Science"},
+        {"id": "9260c753-a8a9-49b8-a3a3-28f907b3f84a", "code": "E&TC", "name": "Electronics and Telecommunication Engineering"},
+        {"id": "c0c9498b-06c3-4e7a-9041-3cd7e104399a", "code": "MECH", "name": "Mechanical Engineering"},
+        {"id": "730449ab-f29f-4d0a-8ea1-3e17116e5ae6", "code": "Civil", "name": "Civil Engineering"},
         {"id": "d7fda5ae-09ef-4324-9048-7b721bf89bf7", "code": "GEN", "name": "General Department"},
         {"id": "955f5c89-535f-4324-a7e9-7e8762380ac9", "code": "LIB", "name": "Library Department"}
     ]
@@ -61,7 +62,12 @@ class CacheService:
     def get_departments(cls, force_refresh: bool = False) -> List[Dict[str, Any]]:
         with cls._lock:
             if cls._departments is not None and not force_refresh:
-                return cls._departments
+                return list(cls._departments)
+
+        with cls._dept_refresh_lock:
+            with cls._lock:
+                if cls._departments is not None and not force_refresh:
+                    return list(cls._departments)
 
             from database.supabase_client import get_trusted_backend_client, get_supabase_client
             client = get_trusted_backend_client() or get_supabase_client()
@@ -73,25 +79,22 @@ class CacheService:
 
             if not depts:
                 # Fallback default departments
-                depts = [
-                    {"id": "f4e141ef-14ca-44e4-a1ed-051ee0525419", "code": "CSE", "name": "Computer Science and Engineering"},
-                    {"id": "06059c36-8a03-4f9e-9086-1d116a3bc533", "code": "AIDS", "name": "Artificial Intelligence and Data Science"},
-                    {"id": "a90df03a-3243-4ce2-bdf1-3312c5b3d6f1", "code": "E&TC", "name": "Electronics and Telecommunication Engineering"},
-                    {"id": "d05fe7ee-bfcf-41c3-8be2-72abcb71b802", "code": "MECH", "name": "Mechanical Engineering"},
-                    {"id": "517fc5e3-cf9d-4340-9a4f-a2e6f4770176", "code": "Civil", "name": "Civil Engineering"},
-                    {"id": "d7fda5ae-09ef-4324-9048-7b721bf89bf7", "code": "GEN", "name": "General Department"},
-                    {"id": "955f5c89-535f-4324-a7e9-7e8762380ac9", "code": "LIB", "name": "Library Department"}
-                ]
+                with cls._lock:
+                    if cls._departments:
+                        depts = list(cls._departments)
+                    else:
+                        depts = list(cls.DEFAULT_DEPARTMENTS)
 
-            cls._departments = depts
-            cls._departments_by_code = {d["code"].strip().upper(): d for d in depts if d.get("code")}
-            cls._departments_by_id = {str(d["id"]): d for d in depts if d.get("id")}
-            for d in depts:
-                c = d.get("code", "").strip().upper()
-                if c:
-                    cls._special_dept_ids[c] = str(d["id"])
+            with cls._lock:
+                cls._departments = list(depts)
+                cls._departments_by_code = {d["code"].strip().upper(): d for d in depts if d.get("code")}
+                cls._departments_by_id = {str(d["id"]): d for d in depts if d.get("id")}
+                for d in depts:
+                    c = d.get("code", "").strip().upper()
+                    if c:
+                        cls._special_dept_ids[c] = str(d["id"])
 
-            return cls._departments
+                return list(cls._departments)
 
     @classmethod
     def get_department_by_id(cls, dept_id: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -101,8 +104,9 @@ class CacheService:
         with cls._lock:
             if cls._departments_by_id and clean_id in cls._departments_by_id:
                 return cls._departments_by_id[clean_id]
-            # Fallback refresh if unknown ID
-            cls.get_departments(force_refresh=True)
+        # Fallback refresh if unknown ID outside _lock
+        cls.get_departments(force_refresh=True)
+        with cls._lock:
             if cls._departments_by_id:
                 return cls._departments_by_id.get(clean_id)
         return None
@@ -115,7 +119,9 @@ class CacheService:
         with cls._lock:
             if cls._departments_by_code and clean_code in cls._departments_by_code:
                 return cls._departments_by_code[clean_code]
-            cls.get_departments(force_refresh=True)
+        # Refresh outside _lock
+        cls.get_departments(force_refresh=True)
+        with cls._lock:
             if cls._departments_by_code:
                 return cls._departments_by_code.get(clean_code)
         return None
@@ -127,8 +133,9 @@ class CacheService:
             if clean_code in cls._special_dept_ids:
                 return cls._special_dept_ids[clean_code]
 
-            # Populate departments
-            cls.get_departments()
+        # Populate departments outside _lock
+        cls.get_departments()
+        with cls._lock:
             if clean_code in cls._special_dept_ids:
                 return cls._special_dept_ids[clean_code]
 
@@ -137,6 +144,74 @@ class CacheService:
             if clean_code == "LIB":
                 return "955f5c89-535f-4324-a7e9-7e8762380ac9"
             return None
+
+    @classmethod
+    def resolve_department_id(cls, dept_id_or_code: Optional[str]) -> Optional[str]:
+        """
+        Resolves any department identifier (UUID, legacy dummy UUID, or code like 'AIDS', 'CSE')
+        to the canonical database UUID.
+        """
+        if not dept_id_or_code:
+            return None
+        val = str(dept_id_or_code).strip()
+        if not val or val.lower() == "none":
+            return None
+
+        # Map legacy dummy UUIDs to canonical database department UUIDs
+        LEGACY_UUID_MAP = {
+            "06059c36-8a03-4f9e-9086-1d116a3bc533": "067bc0be-bd8c-47ce-a520-b3e93407deb8",  # AIDS
+            "a90df03a-3243-4ce2-bdf1-3312c5b3d6f1": "9260c753-a8a9-49b8-a3a3-28f907b3f84a",  # E&TC
+            "d05fe7ee-bfcf-41c3-8be2-72abcb71b802": "c0c9498b-06c3-4e7a-9041-3cd7e104399a",  # MECH
+            "517fc5e3-cf9d-4340-9a4f-a2e6f4770176": "730449ab-f29f-4d0a-8ea1-3e17116e5ae6",  # Civil
+        }
+        if val in LEGACY_UUID_MAP:
+            return LEGACY_UUID_MAP[val]
+
+        upper_val = val.upper()
+        # Fast path check under _lock
+        with cls._lock:
+            if cls._departments_by_code and upper_val in cls._departments_by_code:
+                return str(cls._departments_by_code[upper_val]["id"])
+            if cls._departments_by_id and val in cls._departments_by_id:
+                return val
+
+        # Refresh outside _lock (prevents deadlock and serializing I/O across other callers)
+        cls.get_departments(force_refresh=True)
+        with cls._lock:
+            if cls._departments_by_code and upper_val in cls._departments_by_code:
+                return str(cls._departments_by_code[upper_val]["id"])
+            if cls._departments_by_id and val in cls._departments_by_id:
+                return val
+        return val
+
+    @classmethod
+    def validate_and_canonicalize_department_id(cls, dept_id_or_code: Optional[str]) -> Optional[str]:
+        """
+        Strict validation helper specifically for security-sensitive authorization.
+        Resolves department codes, legacy identifiers, and canonical UUIDs, and verifies
+        that the resulting identifier corresponds to a legitimate, recognized department.
+        Returns the canonical database UUID if valid, or None if missing, unknown, or invalid.
+        Fail-closed: Unknown strings and invalid identifiers are NEVER returned as-is.
+        """
+        if not dept_id_or_code:
+            return None
+        resolved = cls.resolve_department_id(dept_id_or_code)
+        if not resolved or resolved.lower() == "none":
+            return None
+
+        # Verify that resolved is an actual known department ID
+        with cls._lock:
+            if cls._departments_by_id and resolved in cls._departments_by_id:
+                return resolved
+
+        # If not in cache, refresh outside lock and re-check
+        cls.get_departments(force_refresh=True)
+        with cls._lock:
+            if cls._departments_by_id and resolved in cls._departments_by_id:
+                return resolved
+
+        # Fail closed: not a recognized department
+        return None
 
     # -------------------------------------------------------------------------
     # REFERENCE DATA: CATEGORIES, SUBCATEGORIES, LOCATIONS
@@ -230,7 +305,8 @@ class CacheService:
     # -------------------------------------------------------------------------
     @classmethod
     def get_security_code_record(cls, role: str, department_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        cache_key = f"{role}:{department_id or ''}"
+        clean_dept_id = cls.resolve_department_id(department_id)
+        cache_key = f"{role}:{clean_dept_id or ''}"
         now = time.time()
         with cls._lock:
             cached = cls._security_codes_cache.get(cache_key)
@@ -273,8 +349,8 @@ class CacheService:
         if record is None:
             try:
                 query = client.table("staff_security_codes").select("*").eq("role", role)
-                if department_id:
-                    query = query.eq("department_id", department_id)
+                if clean_dept_id:
+                    query = query.eq("department_id", clean_dept_id)
                 res = query.execute()
                 if res.data and len(res.data) > 0:
                     record = res.data[0]

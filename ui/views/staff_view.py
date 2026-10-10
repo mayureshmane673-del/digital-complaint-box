@@ -719,12 +719,15 @@ class StaffView:
 
         def make_reset_handler(student_id: str, roll_num: str, student_name: str):
             def handle_click(e):
+                from ui.views.account_view import generate_secure_temporary_password
+                unique_temp_pw = generate_secure_temporary_password()
                 new_pw_field = ft.TextField(
                     label="Temporary Password",
-                    value="Temp@2026!",
-                    password=True,
+                    value=unique_temp_pw,
+                    password=False,
                     can_reveal_password=True,
-                    dense=True
+                    dense=True,
+                    helper_text="Auto-generated secure password. You may edit before resetting."
                 )
 
                 def do_student_reset(e_rst):
@@ -748,12 +751,18 @@ class StaffView:
                                 controls=[
                                     ft.Text(f"Password for student {student_name} ({roll_num}) has been reset.", size=13),
                                     ft.Container(
-                                        content=ft.Text(f"Temporary Password: {pw}", weight=ft.FontWeight.BOLD, size=14, color=colors["primary"]),
+                                        content=ft.Column(
+                                            controls=[
+                                                ft.Text("Temporary Password:", size=11, color=colors["text_muted"]),
+                                                ft.Text(f"{pw}", weight=ft.FontWeight.BOLD, size=15, color=colors["primary"], selectable=True),
+                                            ],
+                                            spacing=2
+                                        ),
                                         bgcolor=ft.Colors.with_opacity(0.1, colors["primary"]),
                                         border_radius=8,
                                         padding=12
                                     ),
-                                    ft.Text("The student will be required to change this password upon next login.", size=12, color=colors["text_muted"])
+                                    ft.Text("The account has been unlocked. Provide this temporary password securely to the student.", size=12, color=colors["text_muted"])
                                 ],
                                 spacing=10,
                                 tight=True
@@ -777,8 +786,7 @@ class StaffView:
                     ),
                     content=ft.Column(
                         controls=[
-                            ft.Text(f"Reset password for student {student_name} ({roll_num}).", size=13),
-                            ft.Text("This will unlock the student's account and require them to set a new password upon login.", size=12, color=colors["text_muted"]),
+                            ft.Text(f"Reset credentials for student {student_name} ({roll_num}). Account will be unlocked.", size=13),
                             new_pw_field
                         ],
                         spacing=10,

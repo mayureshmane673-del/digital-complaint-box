@@ -45,10 +45,13 @@ class SecurityCodeService:
     @classmethod
     def verify_role_code(cls, role: str, department_id: Optional[str], code: str) -> bool:
         """Verifies provided security code against the stored bcrypt hash."""
+        if not code or not code.strip():
+            return False
+        clean_code = code.strip()
         record = cls.get_code_record(role, department_id)
         if not record or not record.get("code_hash"):
             return False
-        return verify_security_code(code, record["code_hash"])
+        return verify_security_code(clean_code, record["code_hash"])
 
     @classmethod
     def update_security_code(
@@ -84,6 +87,19 @@ class SecurityCodeService:
 
         if not new_code or len(new_code.strip()) < 6:
             return False, "Security code must be at least 6 characters."
+
+        from services.cache_service import CacheService
+        # Canonicalize target department ID based on role
+        if target_role == UserRole.LIBRARY_INCHARGE.value:
+            target_dept_id = target_dept_id or CacheService.get_special_dept_id("LIB")
+        elif target_role == UserRole.GENERAL_HOD.value:
+            target_dept_id = target_dept_id or CacheService.get_special_dept_id("GEN")
+        elif target_role in (UserRole.PRINCIPAL.value, UserRole.HOSTEL_INCHARGE.value):
+            target_dept_id = None
+        else:
+            target_dept_id = CacheService.resolve_department_id(target_dept_id)
+
+        actor_dept_id = CacheService.resolve_department_id(actor_dept_id)
 
         # Rule 1: Coordinator cannot change any code
         if actor_role == UserRole.COORDINATOR.value:

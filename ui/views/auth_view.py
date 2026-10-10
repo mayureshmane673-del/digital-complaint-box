@@ -22,13 +22,9 @@ from models.user import UserRole
 
 logger = logging.getLogger("complaint_box.auth_view")
 
-DEFAULT_DEPTS = [
-    {"id": "f4e141ef-14ca-44e4-a1ed-051ee0525419", "code": "CSE", "name": "Computer Science and Engineering"},
-    {"id": "06059c36-8a03-4f9e-9086-1d116a3bc533", "code": "AIDS", "name": "Artificial Intelligence and Data Science"},
-    {"id": "a90df03a-3243-4ce2-bdf1-3312c5b3d6f1", "code": "E&TC", "name": "Electronics and Telecommunication Engineering"},
-    {"id": "d05fe7ee-bfcf-41c3-8be2-72abcb71b802", "code": "MECH", "name": "Mechanical Engineering"},
-    {"id": "517fc5e3-cf9d-4340-9a4f-a2e6f4770176", "code": "Civil", "name": "Civil Engineering"}
-]
+from services.cache_service import CacheService
+
+DEFAULT_DEPTS = CacheService.DEFAULT_DEPARTMENTS
 
 
 class AuthView:
@@ -38,14 +34,13 @@ class AuthView:
         self.departments = self._load_departments()
 
     def _load_departments(self) -> List[Dict[str, Any]]:
-        from services.cache_service import CacheService
         with CacheService._lock:
             if CacheService._departments is not None:
                 return CacheService._departments
         # Background pre-warm so initial login render has 0ms network latency
         import threading
         threading.Thread(target=CacheService.get_departments, daemon=True).start()
-        return DEFAULT_DEPTS
+        return CacheService.DEFAULT_DEPARTMENTS
 
     def _make_alert_box(self) -> ft.Container:
         """Creates an in-form visual banner container for instant feedback."""
