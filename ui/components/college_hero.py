@@ -35,7 +35,7 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                         border=ft.Border.all(1, "#bfdbfe"),
                         border_radius=14,
                     ),
-                    ft.Text(label, size=10 if compact else 11, color=colors["text_muted"], text_align=ft.TextAlign.CENTER, max_lines=2),
+                    ft.Text(label, size=9 if compact else 10, color=colors["text_muted"], text_align=ft.TextAlign.CENTER, max_lines=2),
                 ],
                 spacing=6,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,

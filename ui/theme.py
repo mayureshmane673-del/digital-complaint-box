@@ -29,7 +29,7 @@ COLOR_BORDER_DARK = "#334155"        # Slate 700
 COLOR_PRIMARY_DARK = "#3b82f6"       # Lighter Blue for Dark Mode Contrast
 
 
-def is_compact_width(width: Any, breakpoint: int = 900) -> bool:
+def is_compact_width(width: Any, breakpoint: int = 1024) -> bool:
     """Treat an unknown first-layout width as compact until Flet reports dimensions."""
     return not isinstance(width, (int, float)) or width < breakpoint
 
