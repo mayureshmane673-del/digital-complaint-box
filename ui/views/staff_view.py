@@ -263,7 +263,7 @@ class StaffView:
         if campus_overview_card:
             dash_controls.append(campus_overview_card)
         dash_controls.extend([
-            create_complaint_lifecycle_panel(is_dark=is_dark),
+            create_complaint_lifecycle_panel(is_dark=is_dark, compact=is_compact),
             chart_card,
             distribution_row,
             ft.Divider(color=colors["border"]),

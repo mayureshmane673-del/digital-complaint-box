@@ -89,8 +89,8 @@ class AuthView:
         # ---------------------------------------------------------------------
         # TAB 1: STUDENT LOGIN CONTROLS
         # ---------------------------------------------------------------------
-        st_login_roll = ft.TextField(label="Roll Number / Student ID", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True, on_change=lambda e: setattr(st_login_roll, "value", e.control.value))
-        st_login_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(st_login_pass, "value", e.control.value))
+        st_login_roll = ft.TextField(label="Roll Number / Student ID", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True, expand=True, on_change=lambda e: setattr(st_login_roll, "value", e.control.value))
+        st_login_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, expand=True, on_change=lambda e: setattr(st_login_pass, "value", e.control.value))
         btn_st_login = ft.ElevatedButton(
             content=ft.Row(
                 controls=[
@@ -182,7 +182,7 @@ class AuthView:
             value="FE"
         )
         st_reg_pass = ft.TextField(
-            label="Password (min 8 chars, 1 upper, 1 lower, 1 digit, 1 special)",
+            label="Password",
             prefix_icon=ft.Icons.LOCK_OUTLINED,
             password=True,
             can_reveal_password=True,
@@ -290,10 +290,10 @@ class AuthView:
         ]
         sf_login_role = ft.Dropdown(label="Staff Role", options=staff_roles, value=UserRole.COORDINATOR.value, dense=True)
         sf_login_dept = ft.Dropdown(label="Department", options=dept_options, dense=True, value=dept_options[0].key if dept_options else None)
-        sf_login_dept_col = ft.Container(sf_login_dept, col={"xs": 12, "sm": 6})
-        sf_login_user = ft.TextField(label="Staff Username / ID", prefix_icon=ft.Icons.PERSON_OUTLINED, dense=True, on_change=lambda e: setattr(sf_login_user, "value", e.control.value))
-        sf_login_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_login_pass, "value", e.control.value))
-        sf_login_code = ft.TextField(label="Staff Security Code", hint_text="Role Authority Code", prefix_icon=ft.Icons.KEY_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_login_code, "value", e.control.value))
+        sf_login_dept_col = ft.Container(sf_login_dept, col={"xs": 12, "sm": 7})
+        sf_login_user = ft.TextField(label="Staff Username / ID", prefix_icon=ft.Icons.PERSON_OUTLINED, dense=True, expand=True, on_change=lambda e: setattr(sf_login_user, "value", e.control.value))
+        sf_login_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, expand=True, on_change=lambda e: setattr(sf_login_pass, "value", e.control.value))
+        sf_login_code = ft.TextField(label="Staff Security Code", hint_text="Role Authority Code", prefix_icon=ft.Icons.KEY_OUTLINED, password=True, can_reveal_password=True, dense=True, expand=True, on_change=lambda e: setattr(sf_login_code, "value", e.control.value))
 
         def on_staff_role_change(e):
             needs_dept = sf_login_role.value in (UserRole.HOD.value, UserRole.COORDINATOR.value)
@@ -393,10 +393,10 @@ class AuthView:
         # ---------------------------------------------------------------------
         sf_reg_role = ft.Dropdown(label="Select Staff Role", options=staff_roles, value=UserRole.COORDINATOR.value, dense=True)
         sf_reg_dept = ft.Dropdown(label="Department", options=dept_options, dense=True, value=dept_options[0].key if dept_options else None)
-        sf_reg_dept_col = ft.Container(sf_reg_dept, col={"xs": 12, "sm": 6})
+        sf_reg_dept_col = ft.Container(sf_reg_dept, col={"xs": 12, "sm": 7})
         sf_reg_name = ft.TextField(label="Full Name", prefix_icon=ft.Icons.PERSON_OUTLINED, dense=True, on_change=lambda e: setattr(sf_reg_name, "value", e.control.value))
         sf_reg_user = ft.TextField(label="Desired Username", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True, on_change=lambda e: setattr(sf_reg_user, "value", e.control.value))
-        sf_reg_pass = ft.TextField(label="Password (min 8 chars)", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_reg_pass, "value", e.control.value))
+        sf_reg_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_reg_pass, "value", e.control.value))
         sf_reg_code = ft.TextField(label="Role Security Code", hint_text="Required to verify authority", prefix_icon=ft.Icons.KEY_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_reg_code, "value", e.control.value))
         sf_reg_q = ft.TextField(label="Security Question", hint_text="e.g. First school or favourite teacher", dense=True, on_change=lambda e: setattr(sf_reg_q, "value", e.control.value))
         sf_reg_ans = ft.TextField(label="Security Answer", dense=True, on_change=lambda e: setattr(sf_reg_ans, "value", e.control.value))
@@ -580,10 +580,11 @@ class AuthView:
                         ft.Container(st_reg_name, col={"xs": 12, "sm": 6}),
                     ]),
                     ft.ResponsiveRow(controls=[
-                        ft.Container(st_reg_dept, col={"xs": 12, "sm": 6}),
-                        ft.Container(st_reg_year, col={"xs": 12, "sm": 6}),
+                        ft.Container(st_reg_dept, col={"xs": 12, "sm": 8}),
+                        ft.Container(st_reg_year, col={"xs": 12, "sm": 4}),
                     ]),
                     st_reg_pass,
+                    ft.Text("At least 8 characters, including uppercase, lowercase, a digit and a special character.", size=11, color=colors["text_muted"]),
                     ft.ResponsiveRow(controls=[
                         ft.Container(st_reg_q, col={"xs": 12, "sm": 6}),
                         ft.Container(st_reg_ans, col={"xs": 12, "sm": 6}),
@@ -609,7 +610,7 @@ class AuthView:
                     ft.Text("Requires valid staff credentials and role security code.", size=13, color=colors["text_muted"]),
                     alert_sf_login,
                     ft.ResponsiveRow(controls=[
-                        ft.Container(sf_login_role, col={"xs": 12, "sm": 6}),
+                        ft.Container(sf_login_role, col={"xs": 12, "sm": 5}),
                         sf_login_dept_col,
                     ]),
                     sf_login_user,
@@ -630,7 +631,7 @@ class AuthView:
                     ft.Text("Authorized faculty registration with department verification.", size=12, color=colors["text_muted"]),
                     alert_sf_reg,
                     ft.ResponsiveRow(controls=[
-                        ft.Container(sf_reg_role, col={"xs": 12, "sm": 6}),
+                        ft.Container(sf_reg_role, col={"xs": 12, "sm": 5}),
                         sf_reg_dept_col,
                     ]),
                     ft.ResponsiveRow(controls=[
@@ -638,6 +639,7 @@ class AuthView:
                         ft.Container(sf_reg_user, col={"xs": 12, "sm": 6}),
                     ]),
                     sf_reg_pass,
+                    ft.Text("At least 8 characters.", size=11, color=colors["text_muted"]),
                     sf_reg_code,
                     ft.ResponsiveRow(controls=[
                         ft.Container(sf_reg_q, col={"xs": 12, "sm": 6}),

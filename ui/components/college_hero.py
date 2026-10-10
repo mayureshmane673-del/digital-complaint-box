@@ -14,10 +14,10 @@ COLLEGE_STATUE_IMG = "/images/college_statue.jpg"
 def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compact: bool = False) -> ft.Control:
     """Build a lightweight, illustrative complaint lifecycle panel for authentication."""
     colors = get_theme_colors(is_dark)
-    role_label = "STAFF PORTAL" if is_staff else "STUDENT PORTAL"
+    role_label = "STAFF PORTAL" if is_staff else "CAMPUS PORTAL"
     steps = [
         (ft.Icons.DESCRIPTION_OUTLINED, "Submitted"),
-        (ft.Icons.ACCOUNT_TREE_OUTLINED, "Routed"),
+        (ft.Icons.ACCOUNT_TREE_OUTLINED, "Routed to Department"),
         (ft.Icons.ACCESS_TIME, "Under review"),
         (ft.Icons.TASK_ALT, "Resolved"),
     ]
@@ -28,14 +28,19 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                 controls=[
                     ft.Container(
                         content=ft.Icon(icon, size=19, color=colors["primary"]),
-                        width=38 if compact else 44,
-                        height=38 if compact else 44,
+                        width=32 if compact else 44,
+                        height=32 if compact else 44,
                         alignment=ft.Alignment.CENTER,
                         bgcolor="#eff6ff",
                         border=ft.Border.all(1, "#bfdbfe"),
                         border_radius=14,
                     ),
-                    ft.Text(label, size=9 if compact else 10, color=colors["text_muted"], text_align=ft.TextAlign.CENTER, max_lines=2),
+                    ft.Text(
+                        ("Routed to\nDepartment" if compact and label == "Routed to Department" else label),
+                        size=8 if compact else 10,
+                        color=colors["text_muted"], text_align=ft.TextAlign.CENTER,
+                        max_lines=2,
+                    ),
                 ],
                 spacing=6,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -47,36 +52,30 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                 ft.Container(
                     height=2,
                     bgcolor="#bfdbfe",
-                    expand=True,
-                    margin=ft.margin.only(bottom=22),
+                    width=10 if compact else None,
+                    expand=not compact,
+                    margin=ft.margin.only(bottom=18 if compact else 22),
                 )
             )
 
+    lifecycle_controls = [ft.Row(controls=step_items, spacing=3, vertical_alignment=ft.CrossAxisAlignment.START)]
+    if not compact:
+        lifecycle_controls.append(ft.Text(
+            "Illustrative flow · Complaint-specific progress appears in its details",
+            size=11, color=colors["text_muted"],
+        ))
     lifecycle = ft.Container(
-        content=ft.Column(
-            controls=[
-                ft.Row(controls=step_items, spacing=4, vertical_alignment=ft.CrossAxisAlignment.START),
-                ft.ProgressBar(
-                    value=None,
-                    bar_height=2,
-                    color=colors["primary"],
-                    bgcolor="#eff6ff",
-                    semantics_label="Illustrative complaint lifecycle",
-                ),
-                ft.Text("Illustrative flow · Live progress appears on each complaint", size=11, color=colors["text_muted"]),
-            ],
-            spacing=10,
-        ),
+        content=ft.Column(controls=lifecycle_controls, spacing=6 if compact else 10),
         bgcolor=colors["surface"],
         border=ft.Border.all(1, colors["border"]),
         border_radius=14,
-        padding=12 if compact else 16,
+        padding=8 if compact else 16,
     )
 
     return ft.Container(
         content=ft.Column(
             controls=[
-                ft.Container(
+                *([] if compact else [ft.Container(
                     content=ft.Row(
                         controls=[
                             ft.Icon(ft.Icons.ACCOUNT_BALANCE_OUTLINED, size=17, color=colors["primary"]),
@@ -87,34 +86,34 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                     bgcolor="#eff6ff",
                     border_radius=20,
                     padding=ft.padding.symmetric(horizontal=11, vertical=6),
-                ),
-                ft.Text("A better campus starts with being heard.", size=23 if compact else 30, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                )]),
+                ft.Text("Make your voice heard." if compact else "A better campus starts with being heard.", size=20 if compact else 30, weight=ft.FontWeight.BOLD, color=colors["text"]),
                 ft.Text(
-                    "Share concerns securely and follow a clear path to resolution.",
-                    size=13,
+                    "Report an issue and track its progress." if compact else "Share concerns securely and follow a clear path to resolution.",
+                    size=12 if compact else 13,
                     color=colors["text_muted"],
                 ),
                 lifecycle,
-                ft.Row(
+                *([] if compact else [ft.Row(
                     controls=[
                         ft.Icon(ft.Icons.SHIELD_OUTLINED, size=15, color=colors["primary"]),
                         ft.Text("Private, role-based access", size=11, color=colors["text_muted"]),
                     ],
                     spacing=6,
-                ),
+                )]),
             ],
-            spacing=14 if compact else 20,
+            spacing=8 if compact else 20,
             horizontal_alignment=ft.CrossAxisAlignment.START,
         ),
         bgcolor=colors["bg"],
         border_radius=20,
-        padding=14 if compact else 28,
+        padding=10 if compact else 28,
         expand=not compact,
         shadow=get_card_shadow(is_dark),
     )
 
 
-def create_complaint_lifecycle_panel(is_dark: bool = False) -> ft.Control:
+def create_complaint_lifecycle_panel(is_dark: bool = False, compact: bool = False) -> ft.Control:
     """Show the standard complaint workflow as an illustrative dashboard panel."""
     colors = get_theme_colors(is_dark)
     steps = [
@@ -124,7 +123,17 @@ def create_complaint_lifecycle_panel(is_dark: bool = False) -> ft.Control:
         (ft.Icons.TASK_ALT, "Resolved"),
     ]
     flow = []
+    compact_steps = []
     for index, (icon, label) in enumerate(steps):
+        compact_steps.append(ft.Container(
+            content=ft.Row(controls=[
+                ft.Icon(icon, size=17, color=colors["primary"]),
+                ft.Text(label, size=10, color=colors["text"], max_lines=2,
+                        overflow=ft.TextOverflow.ELLIPSIS, expand=True),
+            ], spacing=6),
+            bgcolor=colors["surface_variant"], border_radius=9, padding=8,
+            col={"xs": 6, "sm": 3},
+        ))
         flow.append(ft.Column(
             controls=[
                 ft.Container(
@@ -149,6 +158,7 @@ def create_complaint_lifecycle_panel(is_dark: bool = False) -> ft.Control:
                         weight=ft.FontWeight.BOLD, color=colors["text"]),
             ], spacing=8),
             ft.Text("A clear path from submission to resolution", size=12, color=colors["text_muted"]),
+            ft.ResponsiveRow(controls=compact_steps, spacing=8, run_spacing=8) if compact else
             ft.Row(controls=flow, spacing=4, vertical_alignment=ft.CrossAxisAlignment.START),
         ], spacing=10),
         bgcolor=colors["surface"], border=ft.Border.all(1, colors["border"]),
@@ -215,7 +225,11 @@ def create_dashboard_welcome_banner(
                             ),
                             ft.Column(
                                 controls=[
-                                    ft.Text(f"Welcome back, {user_name}!", size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                                    ft.Text(
+                                        f"Welcome back, {user_name}!", size=14,
+                                        weight=ft.FontWeight.BOLD, color=colors["text"],
+                                        max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
+                                    ),
                                     ft.Text(subtitle_str, size=11, color=colors["text_muted"], max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                                 ],
                                 spacing=2,

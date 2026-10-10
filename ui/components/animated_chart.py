@@ -1,233 +1,13 @@
-"""
-ui/components/animated_chart.py: Animated, responsive chart showing
-Complaints Registered vs Complaints Resolved with real database metrics.
-Supports both light and dark modes and adapts cleanly to desktop and mobile screens.
+"""Responsive horizontal complaint analytics and campus dashboard components.
+Uses real, role-scoped counts and adapts to desktop and mobile screens.
 """
 
-import math
 from typing import Dict, Any, Optional
 import flet as ft
 from ui.theme import (
     COLOR_PRIMARY, COLOR_PRIMARY_LIGHT, COLOR_SURFACE, COLOR_BORDER,
     COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, get_theme_colors
 )
-
-
-def _legacy_create_circular_status_chart(
-    registered: int,
-    resolved: int,
-    in_progress: int = 0,
-    pending: int = 0,
-    rejected: int = 0,
-    title: str = "Complaints Status & Resolution Distribution",
-    subtitle: Optional[str] = None,
-    is_dark: bool = False
-) -> ft.Control:
-    """
-    Builds a prominent circular / donut-style status distribution graph across all dashboards.
-    Uses native Flet 0.86.5 ft.Stack and rotated ft.ProgressRing controls.
-    Zero complaints empty circular state and real-time live DB metrics.
-    """
-    colors = get_theme_colors(is_dark)
-    track_color = colors.get("surface_variant", "#e2e8f0" if not is_dark else "#334155")
-
-    # Metrics calculation
-    res_rate = round((resolved / registered) * 100, 1) if registered > 0 else 0.0
-    in_prog_rate = round((in_progress / registered) * 100, 1) if registered > 0 else 0.0
-    pend_rate = round((pending / registered) * 100, 1) if registered > 0 else 0.0
-    rej_rate = round((rejected / registered) * 100, 1) if registered > 0 else 0.0
-
-    res_frac = min(1.0, max(0.0, resolved / registered)) if registered > 0 else 0.0
-    in_prog_frac = min(1.0, max(0.0, in_progress / registered)) if registered > 0 else 0.0
-    pend_frac = min(1.0, max(0.0, pending / registered)) if registered > 0 else 0.0
-    rej_frac = min(1.0, max(0.0, rejected / registered)) if registered > 0 else 0.0
-
-    # Build Circular Donut Ring (180x180)
-    if registered == 0:
-        donut_ring = ft.Stack(
-            controls=[
-                ft.ProgressRing(value=1.0, stroke_width=14, color=track_color, width=180, height=180),
-                ft.Container(
-                    content=ft.Column(
-                        controls=[
-                            ft.Icon(ft.Icons.QUERY_STATS, size=32, color=colors["primary"]),
-                            ft.Text("0", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                            ft.Text("Grievances", size=11, color=colors["text_muted"], weight=ft.FontWeight.W_500)
-                        ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        spacing=2
-                    ),
-                    width=180,
-                    height=180,
-                    alignment=ft.Alignment.CENTER
-                )
-            ],
-            width=180,
-            height=180
-        )
-    else:
-        ring_layers = [
-            ft.ProgressRing(value=1.0, stroke_width=16, color=track_color, width=180, height=180)
-        ]
-        cum_f = 0.0
-        if res_frac > 0:
-            ring_layers.append(
-                ft.ProgressRing(value=res_frac, stroke_width=16, color="#059669", rotate=2 * math.pi * cum_f, width=180, height=180)
-            )
-            cum_f += res_frac
-        if in_prog_frac > 0:
-            ring_layers.append(
-                ft.ProgressRing(value=in_prog_frac, stroke_width=16, color="#2563eb", rotate=2 * math.pi * cum_f, width=180, height=180)
-            )
-            cum_f += in_prog_frac
-        if pend_frac > 0:
-            ring_layers.append(
-                ft.ProgressRing(value=pend_frac, stroke_width=16, color="#d97706", rotate=2 * math.pi * cum_f, width=180, height=180)
-            )
-            cum_f += pend_frac
-        if rej_frac > 0:
-            ring_layers.append(
-                ft.ProgressRing(value=rej_frac, stroke_width=16, color="#dc2626", rotate=2 * math.pi * cum_f, width=180, height=180)
-            )
-            cum_f += rej_frac
-
-        ring_layers.append(
-            ft.Container(
-                content=ft.Column(
-                    controls=[
-                        ft.Text(f"{res_rate}%", size=24, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                        ft.Text("Resolution", size=11, weight=ft.FontWeight.W_600, color=colors["text_muted"]),
-                        ft.Text(f"{registered} Total", size=10, color=colors["primary"], weight=ft.FontWeight.BOLD)
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    spacing=1
-                ),
-                width=180,
-                height=180,
-                alignment=ft.Alignment.CENTER
-            )
-        )
-        donut_ring = ft.Stack(controls=ring_layers, width=180, height=180)
-
-    def make_stat_metric(label: str, count: int, pct: float, color: str):
-        return ft.Container(
-            content=ft.Row(
-                controls=[
-                    ft.Row(
-                        controls=[
-                            ft.Container(width=12, height=12, border_radius=6, bgcolor=color),
-                            ft.Text(label, size=13, weight=ft.FontWeight.W_600, color=colors["text"])
-                        ],
-                        spacing=8
-                    ),
-                    ft.Row(
-                        controls=[
-                            ft.Text(str(count), size=14, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                            ft.Text(f"({pct}%)", size=12, color=colors["text_muted"])
-                        ],
-                        spacing=4
-                    )
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN
-            ),
-            padding=ft.padding.symmetric(vertical=4)
-        )
-
-    written_metrics = ft.Column(
-        controls=[
-            ft.Container(
-                content=ft.Row(
-                    controls=[
-                        ft.Text("Total Grievances Recorded:", size=13, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                        ft.Text(str(registered), size=16, weight=ft.FontWeight.BOLD, color=colors["primary"])
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN
-                ),
-                bgcolor=ft.Colors.with_opacity(0.08, colors["primary"]),
-                border_radius=8,
-                padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                margin=ft.margin.only(bottom=6)
-            ),
-            make_stat_metric("Resolved Grievances", resolved, res_rate, "#059669"),
-            make_stat_metric("In Progress (Assigned)", in_progress, in_prog_rate, "#2563eb"),
-            make_stat_metric("Pending Initial Review", pending, pend_rate, "#d97706"),
-            make_stat_metric("Rejected / Invalid", rejected, rej_rate, "#dc2626"),
-            ft.Divider(color=colors["border"], height=12),
-            ft.Row(
-                controls=[
-                    ft.Text("Overall Resolution Rate:", size=12, weight=ft.FontWeight.W_600, color=colors["text_muted"]),
-                    ft.Container(
-                        content=ft.Text(f"{res_rate}%", size=13, weight=ft.FontWeight.BOLD, color="#059669"),
-                        bgcolor="#d1fae5" if not is_dark else "#064e3b",
-                        border_radius=6,
-                        padding=ft.padding.symmetric(horizontal=8, vertical=2)
-                    )
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN
-            )
-        ],
-        spacing=4
-    )
-
-    # Combined Layout
-    card_body = ft.ResponsiveRow(
-        controls=[
-            ft.Container(
-                content=donut_ring,
-                alignment=ft.Alignment.CENTER,
-                col={"xs": 12, "sm": 5},
-                padding=ft.padding.symmetric(vertical=10)
-            ),
-            ft.Container(
-                content=written_metrics,
-                col={"xs": 12, "sm": 7},
-                padding=ft.padding.only(left=8, right=8)
-            )
-        ],
-        alignment=ft.MainAxisAlignment.CENTER,
-        vertical_alignment=ft.CrossAxisAlignment.CENTER
-    )
-
-    return ft.Container(
-        content=ft.Column(
-            controls=[
-                ft.Row(
-                    controls=[
-                        ft.Column(
-                            controls=[
-                                ft.Row(
-                                    controls=[
-                                        ft.Icon(ft.Icons.PIE_CHART_OUTLINE, color=colors["primary"], size=22),
-                                        ft.Text(title, size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                                    ],
-                                    spacing=8
-                                ),
-                                ft.Text(subtitle or "Circular status breakdown & resolution tracking", size=12, color=colors["text_muted"])
-                            ],
-                            spacing=2
-                        ),
-                        ft.Container(
-                            content=ft.Text(f"{res_rate}% Resolved", size=12, weight=ft.FontWeight.BOLD, color="#059669"),
-                            bgcolor="#d1fae5" if not is_dark else "#064e3b",
-                            border_radius=8,
-                            padding=ft.padding.symmetric(horizontal=10, vertical=4)
-                        )
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    wrap=True
-                ),
-                ft.Divider(color=colors["border"], height=12),
-                card_body
-            ],
-            spacing=10
-        ),
-        bgcolor=colors["surface"],
-        border=ft.Border.all(1, colors["border"]),
-        border_radius=12,
-        padding=16
-    )
 
 
 def create_horizontal_resolution_summary(
@@ -691,13 +471,32 @@ def create_category_distribution_chart(
         color_hex = palette[idx % len(palette)]
         pct = round((count / total) * 100, 1) if total > 0 else 0.0
         frac = min(1.0, count / total) if total > 0 else 0.0
+        category_key = cat_name.casefold()
+        if "canteen" in category_key or "food" in category_key:
+            category_icon = ft.Icons.RESTAURANT_OUTLINED
+        elif "academic" in category_key or "class" in category_key:
+            category_icon = ft.Icons.SCHOOL_OUTLINED
+        elif "faculty" in category_key or "staff" in category_key:
+            category_icon = ft.Icons.GROUP_OUTLINED
+        elif "water" in category_key or "sanitation" in category_key:
+            category_icon = ft.Icons.WATER_DROP_OUTLINED
+        elif "hostel" in category_key:
+            category_icon = ft.Icons.HOME_WORK_OUTLINED
+        elif "computer" in category_key or "internet" in category_key:
+            category_icon = ft.Icons.COMPUTER_OUTLINED
+        else:
+            category_icon = ft.Icons.CATEGORY_OUTLINED
         bar = ft.Column(
             controls=[
                 ft.Row(
                     controls=[
                         ft.Row(
                             controls=[
-                                ft.Container(width=10, height=10, border_radius=5, bgcolor=color_hex),
+                                ft.Container(
+                                    content=ft.Icon(category_icon, size=14, color=color_hex),
+                                    width=22, height=22, alignment=ft.Alignment.CENTER,
+                                    bgcolor=ft.Colors.with_opacity(0.12, color_hex), border_radius=6,
+                                ),
                                 ft.Text(cat_name, size=12, weight=ft.FontWeight.W_600, color=colors["text"], max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
                             ],
                             spacing=6
