@@ -13,7 +13,7 @@ from ui.theme import (
 )
 
 
-def create_circular_status_chart(
+def _legacy_create_circular_status_chart(
     registered: int,
     resolved: int,
     in_progress: int = 0,
@@ -230,8 +230,63 @@ def create_circular_status_chart(
     )
 
 
-# Alias for backwards compatibility across all callers
-create_registered_vs_resolved_chart = create_circular_status_chart
+def create_horizontal_resolution_summary(
+    registered: int,
+    resolved: int,
+    in_progress: int = 0,
+    pending: int = 0,
+    rejected: int = 0,
+    title: str = "Complaint Resolution",
+    subtitle: Optional[str] = None,
+    is_dark: bool = False,
+) -> ft.Control:
+    """Show real complaint status counts and resolution as horizontal measures."""
+    colors = get_theme_colors(is_dark)
+    denominator = max(0, registered)
+    rate = round(resolved * 100 / denominator, 1) if denominator else 0.0
+    statuses = [
+        ("Resolved", resolved, "#059669", ft.Icons.TASK_ALT),
+        ("In Progress", in_progress, "#2563eb", ft.Icons.PENDING_ACTIONS),
+        ("Pending", pending, "#d97706", ft.Icons.HOURGLASS_TOP),
+        ("Rejected / Invalid", rejected, "#dc2626", ft.Icons.CANCEL_OUTLINED),
+    ]
+    status_cards = [ft.Container(
+        content=ft.Row(controls=[
+            ft.Icon(icon, size=17, color=color),
+            ft.Column(controls=[
+                ft.Text(str(count), size=18, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                ft.Text(label, size=10, color=colors["text_muted"], max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS),
+            ], spacing=1, expand=True),
+        ], spacing=7, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        bgcolor=colors["surface_variant"], border_radius=9, padding=9,
+        col={"xs": 6, "sm": 3},
+    ) for label, count, color, icon in statuses]
+    return ft.Container(
+        content=ft.Column(controls=[
+            ft.Row(controls=[
+                ft.Column(controls=[
+                    ft.Text(title, size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                    ft.Text(subtitle or "Status of complaints in your authorized scope",
+                            size=12, color=colors["text_muted"]),
+                ], spacing=2, expand=True),
+                ft.Column(controls=[
+                    ft.Text(f"{rate}%", size=24, weight=ft.FontWeight.BOLD, color="#059669"),
+                    ft.Text("Resolved", size=10, color=colors["text_muted"]),
+                ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.END),
+            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.ProgressBar(value=min(1.0, max(0.0, rate / 100)), color="#059669",
+                           bgcolor=colors["surface_variant"], bar_height=10, border_radius=6),
+            ft.ResponsiveRow(controls=status_cards, spacing=8, run_spacing=8),
+        ], spacing=12),
+        bgcolor=colors["surface"], border=ft.Border.all(1, colors["border"]),
+        border_radius=12, padding=16,
+    )
+
+
+# Keep existing imports compatible while rendering the horizontal dashboard design.
+create_circular_status_chart = create_horizontal_resolution_summary
+create_registered_vs_resolved_chart = create_horizontal_resolution_summary
 
 
 def create_hero_3d_badge(is_dark: bool = False) -> ft.Control:

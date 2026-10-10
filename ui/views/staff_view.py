@@ -20,7 +20,7 @@ from ui.theme import (
     is_compact_width,
 )
 from ui.state import AppState
-from ui.components.college_hero import create_dashboard_welcome_banner
+from ui.components.college_hero import create_dashboard_welcome_banner, create_complaint_lifecycle_panel
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
 from ui.components.stat_card import create_stat_card
 from ui.components.complaint_card import create_complaint_card
@@ -263,6 +263,7 @@ class StaffView:
         if campus_overview_card:
             dash_controls.append(campus_overview_card)
         dash_controls.extend([
+            create_complaint_lifecycle_panel(is_dark=is_dark),
             chart_card,
             distribution_row,
             ft.Divider(color=colors["border"]),

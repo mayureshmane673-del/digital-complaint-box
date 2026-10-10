@@ -114,6 +114,48 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
     )
 
 
+def create_complaint_lifecycle_panel(is_dark: bool = False) -> ft.Control:
+    """Show the standard complaint workflow as an illustrative dashboard panel."""
+    colors = get_theme_colors(is_dark)
+    steps = [
+        (ft.Icons.DESCRIPTION_OUTLINED, "Complaint Received"),
+        (ft.Icons.ACCOUNT_BALANCE_OUTLINED, "Assigned to Department"),
+        (ft.Icons.PENDING_ACTIONS, "Under Review"),
+        (ft.Icons.TASK_ALT, "Resolved"),
+    ]
+    flow = []
+    for index, (icon, label) in enumerate(steps):
+        flow.append(ft.Column(
+            controls=[
+                ft.Container(
+                    content=ft.Icon(icon, size=20, color=colors["primary"]),
+                    width=42, height=42, alignment=ft.Alignment.CENTER,
+                    bgcolor=colors["surface_variant"], border_radius=12,
+                ),
+                ft.Text(label, size=10, color=colors["text_muted"],
+                        text_align=ft.TextAlign.CENTER, max_lines=2),
+            ], spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True,
+        ))
+        if index < len(steps) - 1:
+            flow.append(ft.Container(
+                height=2, bgcolor=colors["border"], expand=True,
+                margin=ft.margin.only(bottom=22),
+            ))
+    return ft.Container(
+        content=ft.Column(controls=[
+            ft.Row(controls=[
+                ft.Icon(ft.Icons.ACCOUNT_TREE_OUTLINED, size=19, color=colors["primary"]),
+                ft.Text("Complaint Resolution Process", size=15,
+                        weight=ft.FontWeight.BOLD, color=colors["text"]),
+            ], spacing=8),
+            ft.Text("A clear path from submission to resolution", size=12, color=colors["text_muted"]),
+            ft.Row(controls=flow, spacing=4, vertical_alignment=ft.CrossAxisAlignment.START),
+        ], spacing=10),
+        bgcolor=colors["surface"], border=ft.Border.all(1, colors["border"]),
+        border_radius=12, padding=16,
+    )
+
+
 def create_dashboard_welcome_banner(
     user_name: str,
     roll_number: str = "",

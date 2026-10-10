@@ -651,30 +651,46 @@ class AuthView:
             padding=ft.padding.symmetric(horizontal=16, vertical=20)
         )
 
-        tabs = ft.Tabs(
-            selected_index=initial_tab,
-            length=4,
+        # Split navigation into portal and action selectors. Each row now has
+        # only two options, so labels and icons remain visible even on phones.
+        student_tabs = ft.Tabs(
+            selected_index=1 if initial_tab == 1 else 0,
+            length=2,
             animation_duration=ft.Duration(milliseconds=250),
-            content=ft.Column(
-                expand=True,
-                controls=[
-                    ft.TabBar(
-                        scrollable=True,
-                        tab_alignment=ft.TabAlignment.START,
-                        tabs=[
-                            ft.Tab(label="Student Login", icon=ft.Icons.SCHOOL),
-                            ft.Tab(label="Student Register", icon=ft.Icons.PERSON_ADD),
-                            ft.Tab(label="Staff Login", icon=ft.Icons.ADMIN_PANEL_SETTINGS),
-                            ft.Tab(label="Staff Register", icon=ft.Icons.SECURITY),
-                        ]
-                    ),
-                    ft.TabBarView(
-                        expand=True,
-                        controls=[tab1_content, tab2_content, tab3_content, tab4_content]
-                    )
-                ]
-            ),
-            expand=True
+            content=ft.Column(expand=True, controls=[
+                ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
+                    ft.Tab(label="Login", icon=ft.Icons.LOGIN),
+                    ft.Tab(label="Create Account", icon=ft.Icons.PERSON_ADD),
+                ]),
+                ft.TabBarView(expand=True, controls=[tab1_content, tab2_content]),
+            ]),
+            expand=True,
+        )
+        staff_tabs = ft.Tabs(
+            selected_index=1 if initial_tab == 3 else 0,
+            length=2,
+            animation_duration=ft.Duration(milliseconds=250),
+            content=ft.Column(expand=True, controls=[
+                ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
+                    ft.Tab(label="Login", icon=ft.Icons.LOGIN),
+                    ft.Tab(label="Create Account", icon=ft.Icons.PERSON_ADD),
+                ]),
+                ft.TabBarView(expand=True, controls=[tab3_content, tab4_content]),
+            ]),
+            expand=True,
+        )
+        tabs = ft.Tabs(
+            selected_index=1 if initial_tab >= 2 else 0,
+            length=2,
+            animation_duration=ft.Duration(milliseconds=250),
+            content=ft.Column(expand=True, controls=[
+                ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
+                    ft.Tab(label="Student Portal", icon=ft.Icons.SCHOOL),
+                    ft.Tab(label="Staff Portal", icon=ft.Icons.ADMIN_PANEL_SETTINGS),
+                ]),
+                ft.TabBarView(expand=True, controls=[student_tabs, staff_tabs]),
+            ]),
+            expand=True,
         )
 
         raw_width = getattr(self.page, "width", None)
