@@ -152,8 +152,17 @@ def test_ui_dynamic_subcategory_switching(mock_student):
     Then select Hostel -> options must be Hostel subcategories, previous cleared.
     """
     page = MockPage()
-    view = StudentView(page, mock_student)
-    view._render_new_complaint()
+    categories = [{"id": name.lower().replace(" ", "_"), "name": name} for name in PRACTICAL_SUBCATEGORIES]
+    subcategories = {
+        key.lower(): [{"id": f"{key.lower()}_{i}", "name": name} for i, name in enumerate(names)]
+        for key, names in PRACTICAL_SUBCATEGORIES.items()
+    }
+    subcategories.update({category["id"]: subcategories[category["name"].lower()] for category in categories})
+    reference_data = (categories, subcategories, [{"id": "hall-1", "name": "Main Hall"}])
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(CacheService, "get_cached_categories_and_subcategories", classmethod(lambda cls: reference_data))
+        view = StudentView(page, mock_student)
+        view._render_new_complaint()
 
     # Find Electricity category ID
     elec_cat = next((c for c in view.categories if c["name"] == "Electricity"), None)
@@ -215,8 +224,17 @@ def test_ui_other_category_and_custom_compulsory(mock_student):
     Test 5: Selecting Other category must reveal compulsory custom description field.
     """
     page = MockPage()
-    view = StudentView(page, mock_student)
-    view._render_new_complaint()
+    categories = [{"id": name.lower().replace(" ", "_"), "name": name} for name in PRACTICAL_SUBCATEGORIES]
+    subcategories = {
+        key.lower(): [{"id": f"{key.lower()}_{i}", "name": name} for i, name in enumerate(names)]
+        for key, names in PRACTICAL_SUBCATEGORIES.items()
+    }
+    subcategories.update({category["id"]: subcategories[category["name"].lower()] for category in categories})
+    reference_data = (categories, subcategories, [{"id": "hall-1", "name": "Main Hall"}])
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(CacheService, "get_cached_categories_and_subcategories", classmethod(lambda cls: reference_data))
+        view = StudentView(page, mock_student)
+        view._render_new_complaint()
 
     other_cat = next((c for c in view.categories if c["name"].lower() == "other"), None)
     assert other_cat is not None

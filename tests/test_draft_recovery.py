@@ -103,6 +103,9 @@ class MockPageWithStore:
     def run_task(self, handler, *args, **kwargs):
         pass
 
+    def run_thread(self, handler, *args, **kwargs):
+        return handler(*args, **kwargs)
+
 
 def test_sanitize_profile_strips_secrets():
     """Verify passwords, hashes, security answers, and unknown keys are strictly stripped."""
@@ -560,8 +563,10 @@ def test_student_view_ignores_unowned_draft():
         "temp_files": []
     })
 
-    view = StudentView(page, student, initial_tab=1)
-    form_ctrl = view._render_new_complaint()
+    reference_data = ([{"id": "cat-1", "name": "Academic"}], {"cat-1": []}, [{"id": "loc-1", "name": "Hall 1"}])
+    with patch("services.cache_service.CacheService.get_cached_categories_and_subcategories", return_value=reference_data):
+        view = StudentView(page, student, initial_tab=1)
+        form_ctrl = view._render_new_complaint()
     assert form_ctrl is not None
     col = form_ctrl.content
     title_ctrl = next(c for c in col.controls if getattr(c, "label", None) == "Complaint Title")
@@ -592,8 +597,10 @@ def test_student_view_restores_draft_values():
         "temp_files": []
     })
 
-    view = StudentView(page, student, initial_tab=1)
-    form_ctrl = view._render_new_complaint()
+    reference_data = ([{"id": "cat-1", "name": "Academic"}], {"cat-1": []}, [{"id": "loc-1", "name": "Hall 1"}])
+    with patch("services.cache_service.CacheService.get_cached_categories_and_subcategories", return_value=reference_data):
+        view = StudentView(page, student, initial_tab=1)
+        form_ctrl = view._render_new_complaint()
 
     assert form_ctrl is not None
     col = form_ctrl.content

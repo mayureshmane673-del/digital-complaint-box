@@ -839,6 +839,7 @@ class TestStaffSecurityAndStudentManagement:
         from ui.views.force_password_change_view import ForcePasswordChangeView
 
         mock_page = MagicMock()
+        mock_page.run_thread = lambda handler, *args, **kwargs: handler(*args, **kwargs)
         mock_user = {"id": "test-student-id", "roll_number": "240101001", "full_name": "Test Student"}
         callback_called = [False]
 

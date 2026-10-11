@@ -9,6 +9,7 @@ ui/views/account_view.py: Comprehensive Account Management view supporting:
 """
 
 from typing import Callable, Optional, Dict, Any, List
+import logging
 import flet as ft
 import secrets
 import string
@@ -21,6 +22,8 @@ from ui.theme import (
 from ui.state import AppState
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
 from models.user import UserRole
+
+logger = logging.getLogger("complaint_box.account_view")
 
 
 def generate_secure_temporary_password(length: int = 12) -> str:
@@ -125,24 +128,32 @@ class AccountView:
         )
 
         def save_profile(e):
-            new_name = name_field.value or ""
+            if save_btn.disabled:
+                return
+            new_name = (name_field.value or "").strip()
             save_btn.disabled = True
-            save_btn.content = ft.Text("Saving...")
+            save_btn.content = ft.Text("Saving…")
             self.page.update()
 
-            ok, msg = AccountService.update_profile(self.user_id, self.role, new_name)
-            save_btn.disabled = False
-            save_btn.content = ft.Text("Save Changes")
+            def persist_profile():
+                try:
+                    ok, msg = AccountService.update_profile(self.user_id, self.role, new_name)
+                except Exception as exc:
+                    logger.warning("Profile update failed (%s)", type(exc).__name__)
+                    ok, msg = False, "Unable to update your profile. Please try again."
+                if ok:
+                    self.user["full_name"] = new_name
+                    if AppState.current_user:
+                        AppState.current_user["full_name"] = new_name
+                save_btn.disabled = False
+                save_btn.content = ft.Text("Save Changes")
+                show_feedback_message(self.page, msg, is_error=not ok)
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
 
-            if ok:
-                self.user["full_name"] = new_name.strip()
-                if AppState.current_user:
-                    AppState.current_user["full_name"] = new_name.strip()
-                show_feedback_message(self.page, msg, is_error=False)
-            else:
-                show_feedback_message(self.page, msg, is_error=True)
-            self.page.update()
-
+            self.page.run_thread(persist_profile)
         save_btn.on_click = save_profile
 
         info_rows = [
@@ -226,6 +237,8 @@ class AccountView:
         )
 
         def do_change_password(e):
+            if change_btn.disabled:
+                return
             curr_val = curr_pass_field.value or ""
             new_val = new_pass_field.value or ""
             conf_val = confirm_pass_field.value or ""
@@ -233,28 +246,33 @@ class AccountView:
             if not curr_val:
                 show_feedback_message(self.page, "Current password is required.", is_error=True)
                 return
-
             if new_val != conf_val:
                 show_feedback_message(self.page, "New password and Confirm password do not match.", is_error=True)
                 return
 
             change_btn.disabled = True
-            change_btn.content = ft.Text("Updating...")
+            change_btn.content = ft.Text("Updating…")
             self.page.update()
 
-            ok, msg = AccountService.change_own_password(self.user_id, self.role, curr_val, new_val)
-            change_btn.disabled = False
-            change_btn.content = ft.Text("Update Password")
+            def update_password():
+                try:
+                    ok, msg = AccountService.change_own_password(self.user_id, self.role, curr_val, new_val)
+                except Exception as exc:
+                    logger.warning("Account password change failed (%s)", type(exc).__name__)
+                    ok, msg = False, "Unable to update your password. Please try again."
+                change_btn.disabled = False
+                change_btn.content = ft.Text("Update Password")
+                if ok:
+                    curr_pass_field.value = ""
+                    new_pass_field.value = ""
+                    confirm_pass_field.value = ""
+                show_feedback_message(self.page, msg, is_error=not ok)
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
 
-            if ok:
-                show_feedback_message(self.page, msg, is_error=False)
-                curr_pass_field.value = ""
-                new_pass_field.value = ""
-                confirm_pass_field.value = ""
-            else:
-                show_feedback_message(self.page, msg, is_error=True)
-            self.page.update()
-
+            self.page.run_thread(update_password)
         change_btn.on_click = do_change_password
 
         return ft.Container(

@@ -575,7 +575,8 @@ class ComplaintService:
         role: str,
         user_id: str,
         department_id: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None
+        filters: Optional[Dict[str, Any]] = None,
+        raise_errors: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Retrieves complaints strictly bounded by 6-role routing matrix:
@@ -601,7 +602,9 @@ class ComplaintService:
             try:
                 anon_res = client.table("anonymous_complaint_owners").select("complaint_id").eq("student_id", user_id).execute()
                 anon_ids = [r["complaint_id"] for r in (anon_res.data or []) if r.get("complaint_id")]
-            except Exception:
+            except Exception as exc:
+                if raise_errors:
+                    raise RuntimeError("Student complaints are unavailable") from exc
                 anon_ids = []
 
             # Single unified query for both direct and anonymous student complaints
@@ -625,7 +628,9 @@ class ComplaintService:
             try:
                 res = c_query.order("created_at", desc=True).execute()
                 results = res.data or []
-            except Exception:
+            except Exception as exc:
+                if raise_errors:
+                    raise RuntimeError("Student complaints are unavailable") from exc
                 results = []
 
             return results
@@ -654,7 +659,12 @@ class ComplaintService:
         if filters.get("category_id"):
             query = query.eq("category_id", filters["category_id"])
 
-        res = query.order("created_at", desc=True).execute()
+        try:
+            res = query.order("created_at", desc=True).execute()
+        except Exception as exc:
+            if raise_errors:
+                raise RuntimeError("Staff complaints are unavailable") from exc
+            raise
         raw_results = res.data or []
 
         # In-memory post-filtering to enforce exact role boundaries

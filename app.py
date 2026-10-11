@@ -140,6 +140,8 @@ def main(page: ft.Page):
             )
 
         compact = is_compact_screen()
+        auth_layout_width = page.width or 1280
+        page._last_auth_layout = (compact, auth_layout_width < 1024, auth_layout_width < 1150)
         page.appbar = ft.AppBar(
             leading=ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=ft.Colors.WHITE),
             leading_width=36 if compact else 40,
@@ -364,8 +366,10 @@ def main(page: ft.Page):
         elif AppState.current_user and AppState.current_user.get("must_change_password"):
             render_force_password_change_view()
         elif not AppState.current_user:
-            if not hasattr(page, "_last_auth_compact") or page._last_auth_compact != compact:
-                page._last_auth_compact = compact
+            auth_layout_width = page.width or 1280
+            auth_layout = (compact, auth_layout_width < 1024, auth_layout_width < 1150)
+            if getattr(page, "_last_auth_layout", None) != auth_layout:
+                page._last_auth_layout = auth_layout
                 render_auth_view()
 
     page.on_resize = on_page_resize
@@ -505,14 +509,10 @@ def on_app_startup():
     Warms CacheService in background thread upon Uvicorn boot so reference data
     (departments, categories, subcategories, locations) is pre-loaded into RAM.
     """
-    import threading
-    def _warm_cache_worker():
-        try:
-            from services.cache_service import CacheService
-            CacheService.prewarm_reference_cache(async_mode=False)
-        except Exception:
-            pass
-    threading.Thread(target=_warm_cache_worker, daemon=True).start()
+    from services.cache_service import CacheService
+    # CacheService owns the single background worker. The old call passed an
+    # unsupported keyword, so the worker exited before warming any data.
+    CacheService.prewarm_reference_cache()
 
 
 # =============================================================================

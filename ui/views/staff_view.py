@@ -5,6 +5,9 @@ loading state prevention, and dark mode theming.
 """
 
 from typing import Dict, Any, Optional, List
+import logging
+import time
+import threading
 import flet as ft
 from services.complaint_service import ComplaintService
 from services.issue_group_service import IssueGroupService
@@ -38,6 +41,8 @@ from ui.views.student_view import BASELINE_SUBCATEGORIES
 from models.user import UserRole
 from utils.helpers import format_datetime
 
+logger = logging.getLogger("complaint_box.staff_view")
+
 
 class StaffView:
     def __init__(self, page: ft.Page, staff: Dict[str, Any], role: str):
@@ -56,12 +61,51 @@ class StaffView:
         self.active_container = ft.Container(expand=True)
         self._tab_cache: Dict[int, ft.Control] = {}
         self._dashboard_loading = False
+        self._dashboard_error: Optional[str] = None
+        self._complaint_query_lock = threading.Lock()
+        self._complaint_query_event: Optional[threading.Event] = None
+        self._complaint_query_error: Optional[str] = None
+        self._dept_breakdown_loading = False
+        self._dept_breakdown_error: Optional[str] = None
 
     def invalidate_tab_cache(self, index: Optional[int] = None):
         if index is None:
             self._tab_cache.clear()
         else:
             self._tab_cache.pop(index, None)
+
+    def _load_staff_complaints(self, force: bool = False) -> List[Dict[str, Any]]:
+        """Share one department-scoped complaint request across dashboard and list."""
+        with self._complaint_query_lock:
+            if self.cached_complaints is not None and not force:
+                return self.cached_complaints
+            event = self._complaint_query_event
+            if event is None or event.is_set():
+                event = threading.Event()
+                self._complaint_query_event = event
+                self._complaint_query_error = None
+                is_owner = True
+            else:
+                is_owner = False
+
+        if is_owner:
+            try:
+                self.cached_complaints = ComplaintService.get_complaints_for_user(
+                    self.role,
+                    self.staff_id,
+                    self.department_id,
+                    raise_errors=True,
+                ) or []
+            except Exception as exc:
+                self._complaint_query_error = type(exc).__name__
+            finally:
+                event.set()
+        else:
+            event.wait()
+
+        if self._complaint_query_error:
+            raise RuntimeError("Staff complaints are unavailable")
+        return self.cached_complaints or []
 
     def _ensure_categories_loaded(self):
         if not self.categories:
@@ -122,20 +166,65 @@ class StaffView:
         if getattr(self, "_dashboard_loading", False):
             return
         self._dashboard_loading = True
+        self._dashboard_error = None
 
         import threading
         def _fetch_worker():
+            started_at = time.perf_counter()
+            timings = {"metrics": None, "complaints": None}
+            errors = []
             try:
-                from concurrent.futures import ThreadPoolExecutor
+                from concurrent.futures import ThreadPoolExecutor, as_completed
                 with ThreadPoolExecutor(max_workers=2) as executor:
-                    f_m = executor.submit(AnalyticsService.get_dashboard_metrics, self.role, self.department_id)
-                    f_c = executor.submit(ComplaintService.get_complaints_for_user, self.role, self.staff_id, self.department_id)
-                    self.cached_metrics = f_m.result()
-                    self.cached_complaints = f_c.result() or []
-            except Exception as e:
-                pass
+                    def timed_call(name, func, *args):
+                        call_started = time.perf_counter()
+                        value = func(*args)
+                        return name, value, time.perf_counter() - call_started
+
+                    futures = [
+                        executor.submit(timed_call, "metrics", AnalyticsService.get_dashboard_metrics, self.role, self.department_id),
+                        executor.submit(
+                            timed_call,
+                            "complaints",
+                            lambda *_: self._load_staff_complaints(),
+                            self.role,
+                            self.staff_id,
+                            self.department_id,
+                        ),
+                    ]
+                    for future in as_completed(futures):
+                        try:
+                            name, value, elapsed = future.result()
+                            timings[name] = elapsed
+                            if name == "metrics":
+                                self.cached_metrics = value
+                            else:
+                                self.cached_complaints = value or []
+                        except Exception as exc:
+                            errors.append(type(exc).__name__)
+                        if self.selected_tab_index == 0:
+                            self.invalidate_tab_cache(0)
+                            self.active_container.content = self._render_dashboard()
+                            try:
+                                self.page.update()
+                            except Exception:
+                                pass
+                if errors:
+                    self._dashboard_error = "Some dashboard data could not be loaded. Check your connection and retry."
+                logger.info(
+                    "Staff dashboard data ready role=%s metrics_s=%s complaints_s=%s total_s=%.3f",
+                    self.role,
+                    f"{timings['metrics']:.3f}" if timings["metrics"] is not None else "failed",
+                    f"{timings['complaints']:.3f}" if timings["complaints"] is not None else "failed",
+                    time.perf_counter() - started_at,
+                )
+            except Exception as exc:
+                self._dashboard_error = "Dashboard data could not be loaded. Check your connection and retry."
+                logger.warning("Staff dashboard load failed (%s)", type(exc).__name__)
             finally:
                 self._dashboard_loading = False
+                if self.role == UserRole.PRINCIPAL.value and self.cached_metrics is not None and self.cached_complaints is not None:
+                    self._trigger_principal_breakdown_load()
                 if self.selected_tab_index == 0:
                     self.invalidate_tab_cache(0)
                     self.active_container.content = self._render_dashboard()
@@ -145,6 +234,34 @@ class StaffView:
                         pass
 
         threading.Thread(target=_fetch_worker, daemon=True).start()
+
+    def _trigger_principal_breakdown_load(self):
+        """Load the heavier campus comparison away from the first dashboard render."""
+        if self.role != UserRole.PRINCIPAL.value or self.cached_dept_breakdown is not None or self._dept_breakdown_loading:
+            return
+        self._dept_breakdown_loading = True
+
+        import threading
+        def _fetch_breakdown():
+            started_at = time.perf_counter()
+            try:
+                self.cached_dept_breakdown = AnalyticsService.get_department_breakdown()
+                self._dept_breakdown_error = None
+                logger.info("Principal campus breakdown loaded in %.3fs", time.perf_counter() - started_at)
+            except Exception as exc:
+                self._dept_breakdown_error = type(exc).__name__
+                logger.warning("Principal campus breakdown unavailable (%s)", type(exc).__name__)
+            finally:
+                self._dept_breakdown_loading = False
+                if self.selected_tab_index == 0:
+                    self.invalidate_tab_cache(0)
+                    self.active_container.content = self._render_dashboard()
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_fetch_breakdown, daemon=True).start()
 
     # -------------------------------------------------------------------------
     # TAB: DASHBOARD
@@ -159,24 +276,67 @@ class StaffView:
             if cached_m:
                 self.cached_metrics = cached_m
 
-        # If data is not yet available, trigger non-blocking background load and use skeleton/fallbacks
-        if self.cached_metrics is None or self.cached_complaints is None:
+        # Load essential summary and list data in parallel without blocking the
+        # first screen. Missing values stay placeholders until their query succeeds.
+        if (self.cached_metrics is None or self.cached_complaints is None) and not self._dashboard_error:
             self._trigger_progressive_staff_dashboard_load()
-
-        metrics = self.cached_metrics or {
-            "total": 0, "pending": 0, "in_progress": 0, "resolved": 0,
-            "rejected": 0, "deleted": 0, "urgent_high": 0,
-            "avg_resolution_hours": 0.0, "satisfaction_rate": 0.0, "total_feedback": 0
-        }
+        metrics = self.cached_metrics or {}
+        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
+        welcome_banner = create_dashboard_welcome_banner(
+            user_name=self.staff.get('full_name', 'Faculty Member'),
+            role_text=f"{self.role} ({self.department_code or 'Campus-wide'})",
+            on_new_complaint=None,
+            is_dark=is_dark,
+            compact=is_compact
+        )
 
         stat_cards = [
-            create_stat_card("Total Active", str(metrics["total"]), ft.Icons.FOLDER, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-            create_stat_card("Pending Action", str(metrics["pending"]), ft.Icons.HOURGLASS_TOP, "#d97706", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-            create_stat_card("In Progress", str(metrics["in_progress"]), ft.Icons.PENDING_ACTIONS, "#2563eb", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-            create_stat_card("Resolved", str(metrics["resolved"]), ft.Icons.TASK_ALT, "#059669", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-            create_stat_card("Urgent / High", str(metrics["urgent_high"]), ft.Icons.WARNING_AMBER, "#dc2626", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-            create_stat_card("Satisfaction", f"{metrics['satisfaction_rate']}%", ft.Icons.THUMB_UP_ALT, "#0f766e", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("Total Active", str(metrics.get("total", "—")), ft.Icons.FOLDER, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("Pending Action", str(metrics.get("pending", "—")), ft.Icons.HOURGLASS_TOP, "#d97706", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("In Progress", str(metrics.get("in_progress", "—")), ft.Icons.PENDING_ACTIONS, "#2563eb", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("Resolved", str(metrics.get("resolved", "—")), ft.Icons.TASK_ALT, "#059669", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("Urgent / High", str(metrics.get("urgent_high", "—")), ft.Icons.WARNING_AMBER, "#dc2626", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
+            create_stat_card("Satisfaction", f"{metrics['satisfaction_rate']}%" if "satisfaction_rate" in metrics else "—", ft.Icons.THUMB_UP_ALT, "#0f766e", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
         ]
+
+        if self.cached_metrics is None or self.cached_complaints is None:
+            def retry_dashboard(_):
+                self.cached_metrics = None
+                self.cached_complaints = None
+                self._dashboard_error = None
+                self.invalidate_tab_cache(0)
+                self.active_container.content = self._render_dashboard()
+                self.page.update()
+
+            status_controls: List[ft.Control] = []
+            if self._dashboard_error:
+                status_controls.extend([
+                    ft.Icon(ft.Icons.ERROR_OUTLINE, color="#dc2626"),
+                    ft.Text(self._dashboard_error, color=colors["text_muted"], size=13),
+                    ft.ElevatedButton("Retry", icon=ft.Icons.REFRESH, on_click=retry_dashboard),
+                ])
+            else:
+                status_controls.extend([
+                    ft.ProgressRing(width=20, height=20, stroke_width=2, color=colors["primary"]),
+                    ft.Text("Loading current dashboard data…", color=colors["text_muted"], size=13),
+                ])
+            return ft.Column(
+                controls=[
+                    welcome_banner,
+                    ft.Row([ft.Text(f"{self.role} Metrics Overview", size=18, weight=ft.FontWeight.BOLD, color=colors["text"])], wrap=True),
+                    ft.ResponsiveRow(controls=stat_cards, spacing=12, run_spacing=12),
+                    ft.Container(
+                        content=ft.Row(controls=status_controls, alignment=ft.MainAxisAlignment.CENTER, spacing=10, wrap=True),
+                        padding=20,
+                        bgcolor=colors["surface"],
+                        border=ft.border.all(1, colors["border"]),
+                        border_radius=12,
+                    ),
+                ],
+                scroll=ft.ScrollMode.AUTO,
+                spacing=16,
+                expand=True,
+            )
 
         # Complaints in scope
         complaints = self.cached_complaints or []
@@ -226,21 +386,8 @@ class StaffView:
         # For Principal: Add Campus Overview comparing all 5 academic departments
         campus_overview_card = None
         if self.role == UserRole.PRINCIPAL.value:
-            try:
-                if self.cached_dept_breakdown is None:
-                    self.cached_dept_breakdown = AnalyticsService.get_department_breakdown()
+            if self.cached_dept_breakdown is not None:
                 campus_overview_card = create_campus_overview_card(self.cached_dept_breakdown, is_dark=is_dark)
-            except Exception:
-                campus_overview_card = None
-
-        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
-        welcome_banner = create_dashboard_welcome_banner(
-            user_name=self.staff.get('full_name', 'Faculty Member'),
-            role_text=f"{self.role} ({self.department_code or 'Campus-wide'})",
-            on_new_complaint=None,
-            is_dark=is_dark,
-            compact=is_compact
-        )
 
         dash_controls = [
             welcome_banner,
@@ -354,6 +501,7 @@ class StaffView:
             )
 
         complaints_container = ft.Column(spacing=8)
+        complaints_list_loading = [False]
 
         def update_subcat_options(c_val=None):
             if c_val is None:
@@ -378,9 +526,7 @@ class StaffView:
             self.page.update()
 
         def load_data(force: bool = False):
-            if force or self.cached_complaints is None:
-                self.cached_complaints = ComplaintService.get_complaints_for_user(self.role, self.staff_id, self.department_id)
-            return self.cached_complaints
+            return self._load_staff_complaints(force=force)
 
         def reset_filters(e=None):
             search_field.value = ""
@@ -394,7 +540,57 @@ class StaffView:
             refresh_list(force_reload=False)
 
         def refresh_list(force_reload: bool = False):
-            complaints = load_data(force=force_reload)
+            if complaints_list_loading[0]:
+                return
+            if force_reload or self.cached_complaints is None:
+                complaints_list_loading[0] = True
+                complaints_container.controls = [
+                    ft.Container(
+                        content=ft.Row(
+                            controls=[ft.ProgressRing(width=20, height=20, stroke_width=2, color=colors["primary"]), ft.Text("Loading complaints in your scope…", color=colors["text_muted"])],
+                            alignment=ft.MainAxisAlignment.CENTER,
+                            spacing=10,
+                        ),
+                        padding=24,
+                        alignment=ft.Alignment.CENTER,
+                    )
+                ]
+                self.page.update()
+
+                def fetch_complaints():
+                    try:
+                        load_data(force=force_reload)
+                        render_list()
+                    except Exception as exc:
+                        logger.warning("Staff complaint list unavailable (%s)", type(exc).__name__)
+                        complaints_container.controls = [
+                            ft.Container(
+                                content=ft.Column(
+                                    controls=[
+                                        ft.Icon(ft.Icons.ERROR_OUTLINE, color="#dc2626"),
+                                        ft.Text("Complaints in your scope could not be loaded. Check your connection and retry.", color=colors["text_muted"], text_align=ft.TextAlign.CENTER),
+                                        ft.ElevatedButton("Retry", icon=ft.Icons.REFRESH, on_click=lambda _: refresh_list(force_reload=True)),
+                                    ],
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=10,
+                                ),
+                                padding=24,
+                                alignment=ft.Alignment.CENTER,
+                            )
+                        ]
+                        try:
+                            self.page.update()
+                        except Exception:
+                            pass
+                    finally:
+                        complaints_list_loading[0] = False
+
+                self.page.run_thread(fetch_complaints)
+                return
+            render_list()
+
+        def render_list():
+            complaints = load_data(force=False) or []
             query = (search_field.value or "").strip().lower()
             st_val = (status_filter.value or "ALL").strip()
             pr_val = (priority_filter.value or "ALL").strip()

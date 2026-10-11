@@ -61,8 +61,9 @@ class AuthView:
             self.page.update()
 
         def hide():
-            container.visible = False
-            self.page.update()
+            if container.visible:
+                container.visible = False
+                self.page.update()
 
         container.show_alert = show
         container.hide_alert = hide
@@ -136,30 +137,32 @@ class AuthView:
             )
             self.page.update()
 
-            t0 = time.perf_counter()
-            try:
-                ok, msg, student = AuthService.login_student(roll_val, pass_val)
-                elapsed = time.perf_counter() - t0
-                logger.info("Student auth query completed in %.3fs", elapsed)
-                if ok and student:
-                    show_feedback_message(self.page, "Login successful!", is_error=False)
-                    try:
-                        self.on_authenticated(student, UserRole.STUDENT.value)
-                    except Exception as auth_cb_ex:
-                        logger.exception("Student auth callback error: %s", auth_cb_ex)
+            def authenticate_student():
+                t0 = time.perf_counter()
+                try:
+                    ok, msg, student = AuthService.login_student(roll_val, pass_val)
+                    logger.info("Student auth query completed in %.3fs", time.perf_counter() - t0)
+                    if ok and student:
+                        show_feedback_message(self.page, "Login successful!", is_error=False)
+                        try:
+                            self.on_authenticated(student, UserRole.STUDENT.value)
+                        except Exception as auth_cb_ex:
+                            logger.exception("Student auth callback failed (%s)", type(auth_cb_ex).__name__)
+                            _reset_student_btn()
+                            self.page.update()
+                    else:
                         _reset_student_btn()
+                        alert_st_login.show_alert(msg, is_error=True)
+                        show_feedback_message(self.page, msg, is_error=True)
                         self.page.update()
-                else:
+                except Exception as ex:
+                    logger.warning("Student login failed (%s)", type(ex).__name__)
                     _reset_student_btn()
-                    alert_st_login.show_alert(msg, is_error=True)
-                    show_feedback_message(self.page, msg, is_error=True)
+                    alert_st_login.show_alert("Unable to complete login. Please try again.", is_error=True)
+                    show_feedback_message(self.page, "Unable to complete login. Please try again.", is_error=True)
                     self.page.update()
-            except Exception as ex:
-                logger.exception("Student login error: %s", ex)
-                _reset_student_btn()
-                alert_st_login.show_alert("Unable to complete login. Please try again.", is_error=True)
-                show_feedback_message(self.page, "Unable to complete login. Please try again.", is_error=True)
-                self.page.update()
+
+            self.page.run_thread(authenticate_student)
 
         btn_st_login.on_click = do_student_login
 
@@ -181,7 +184,7 @@ class AuthView:
             value="FE"
         )
         st_reg_pass = ft.TextField(
-            label="Password (min 8 chars, 1 upper, 1 lower, 1 digit, 1 special)",
+            label="Password",
             prefix_icon=ft.Icons.LOCK_OUTLINED,
             password=True,
             can_reveal_password=True,
@@ -207,6 +210,8 @@ class AuthView:
         btn_st_reg = ft.ElevatedButton("Register Account", icon=ft.Icons.HOW_TO_REG, style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE))
 
         def do_student_register(e):
+            if btn_st_reg.disabled:
+                return
             alert_st_reg.hide_alert()
             roll_val = (st_reg_roll.value or "").strip()
             name_val = (st_reg_name.value or "").strip()
@@ -225,54 +230,57 @@ class AuthView:
             btn_st_reg.content = "Creating Account..."
             self.page.update()
 
+            hostel_val = bool(st_reg_hostel.value)
             hostel_details = None
-            if st_reg_hostel.value:
+            if hostel_val:
                 hostel_details = {
                     "hostel_name": st_hostel_name.value or "Campus Hostel",
                     "block": st_hostel_block.value or "A",
                     "room_number": st_hostel_room.value or "101"
                 }
 
-            try:
-                ok, msg, new_st = AuthService.register_student(
-                    roll_number=roll_val,
-                    full_name=name_val,
-                    department_id=dept_val,
-                    year=year_val,
-                    password=pass_val,
-                    security_question=q_val,
-                    security_answer=ans_val,
-                    is_hostel=bool(st_reg_hostel.value),
-                    hostel_details=hostel_details
-                )
+            def register_student():
+                try:
+                    ok, msg, new_st = AuthService.register_student(
+                        roll_number=roll_val,
+                        full_name=name_val,
+                        department_id=dept_val,
+                        year=year_val,
+                        password=pass_val,
+                        security_question=q_val,
+                        security_answer=ans_val,
+                        is_hostel=hostel_val,
+                        hostel_details=hostel_details
+                    )
 
-                if ok and new_st:
-                    alert_st_reg.show_alert(f"Account for {roll_val} registered successfully! You can now log in.", is_error=False)
-                    show_feedback_message(self.page, "Registration successful! You can now log in.", is_error=False)
-                    # Clear registration form
-                    st_reg_roll.value = ""
-                    st_reg_name.value = ""
-                    st_reg_pass.value = ""
-                    st_reg_q.value = ""
-                    st_reg_ans.value = ""
-                    st_reg_hostel.value = False
-                    st_hostel_name.visible = False
-                    st_hostel_block.visible = False
-                    st_hostel_room.visible = False
-                    # Keep login inputs clean (no prefilled credentials)
-                    st_login_roll.value = ""
-                    st_login_pass.value = ""
+                    if ok and new_st:
+                        alert_st_reg.show_alert(f"Account for {roll_val} registered successfully! You can now log in.", is_error=False)
+                        show_feedback_message(self.page, "Registration successful! You can now log in.", is_error=False)
+                        st_reg_roll.value = ""
+                        st_reg_name.value = ""
+                        st_reg_pass.value = ""
+                        st_reg_q.value = ""
+                        st_reg_ans.value = ""
+                        st_reg_hostel.value = False
+                        st_hostel_name.visible = False
+                        st_hostel_block.visible = False
+                        st_hostel_room.visible = False
+                        st_login_roll.value = ""
+                        st_login_pass.value = ""
+                        self.page.update()
+                    else:
+                        alert_st_reg.show_alert(msg, is_error=True)
+                        show_feedback_message(self.page, msg, is_error=True)
+                except Exception as ex:
+                    logger.warning("Student registration failed (%s)", type(ex).__name__)
+                    alert_st_reg.show_alert("Unable to complete registration. Please try again.", is_error=True)
+                    show_feedback_message(self.page, "Unable to complete registration. Please try again.", is_error=True)
+                finally:
+                    btn_st_reg.disabled = False
+                    btn_st_reg.content = "Register Account"
                     self.page.update()
-                else:
-                    alert_st_reg.show_alert(msg, is_error=True)
-                    show_feedback_message(self.page, msg, is_error=True)
-            except Exception as ex:
-                alert_st_reg.show_alert("Unable to complete registration. Please try again.", is_error=True)
-                show_feedback_message(self.page, "Unable to complete registration. Please try again.", is_error=True)
-            finally:
-                btn_st_reg.disabled = False
-                btn_st_reg.content = "Register Account"
-                self.page.update()
+
+            self.page.run_thread(register_student)
 
         btn_st_reg.on_click = do_student_register
 
@@ -354,36 +362,38 @@ class AuthView:
             )
             self.page.update()
 
-            t0 = time.perf_counter()
-            try:
-                ok, msg, staff = AuthService.login_staff(
-                    role=role_val,
-                    username=user_val,
-                    password=pass_val,
-                    security_code=code_val,
-                    department_id=dept_val
-                )
-                elapsed = time.perf_counter() - t0
-                logger.info("Staff auth query completed in %.3fs", elapsed)
-                if ok and staff:
-                    show_feedback_message(self.page, "Staff login successful!", is_error=False)
-                    try:
-                        self.on_authenticated(staff, role_val)
-                    except Exception as auth_cb_ex:
-                        logger.exception("Staff auth callback error: %s", auth_cb_ex)
+            def authenticate_staff():
+                t0 = time.perf_counter()
+                try:
+                    ok, msg, staff = AuthService.login_staff(
+                        role=role_val,
+                        username=user_val,
+                        password=pass_val,
+                        security_code=code_val,
+                        department_id=dept_val
+                    )
+                    logger.info("Staff auth query completed in %.3fs", time.perf_counter() - t0)
+                    if ok and staff:
+                        show_feedback_message(self.page, "Staff login successful!", is_error=False)
+                        try:
+                            self.on_authenticated(staff, role_val)
+                        except Exception as auth_cb_ex:
+                            logger.exception("Staff auth callback failed (%s)", type(auth_cb_ex).__name__)
+                            _reset_staff_btn()
+                            self.page.update()
+                    else:
                         _reset_staff_btn()
+                        alert_sf_login.show_alert(msg, is_error=True)
+                        show_feedback_message(self.page, msg, is_error=True)
                         self.page.update()
-                else:
+                except Exception as ex:
+                    logger.warning("Staff login failed (%s)", type(ex).__name__)
                     _reset_staff_btn()
-                    alert_sf_login.show_alert(msg, is_error=True)
-                    show_feedback_message(self.page, msg, is_error=True)
+                    alert_sf_login.show_alert("Invalid username, password, or security code.", is_error=True)
+                    show_feedback_message(self.page, "Invalid username, password, or security code.", is_error=True)
                     self.page.update()
-            except Exception as ex:
-                logger.exception("Staff login error: %s", ex)
-                _reset_staff_btn()
-                alert_sf_login.show_alert("Invalid username, password, or security code.", is_error=True)
-                show_feedback_message(self.page, "Invalid username, password, or security code.", is_error=True)
-                self.page.update()
+
+            self.page.run_thread(authenticate_staff)
 
         btn_sf_login.on_click = do_staff_login
 
@@ -395,7 +405,7 @@ class AuthView:
         sf_reg_dept_col = ft.Container(sf_reg_dept, col={"xs": 12, "sm": 6})
         sf_reg_name = ft.TextField(label="Full Name", prefix_icon=ft.Icons.PERSON_OUTLINED, dense=True, on_change=lambda e: setattr(sf_reg_name, "value", e.control.value))
         sf_reg_user = ft.TextField(label="Desired Username", prefix_icon=ft.Icons.BADGE_OUTLINED, dense=True, on_change=lambda e: setattr(sf_reg_user, "value", e.control.value))
-        sf_reg_pass = ft.TextField(label="Password (min 8 chars)", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_reg_pass, "value", e.control.value))
+        sf_reg_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_reg_pass, "value", e.control.value))
         sf_reg_code = ft.TextField(label="Role Security Code", hint_text="Required to verify authority", prefix_icon=ft.Icons.KEY_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_reg_code, "value", e.control.value))
         sf_reg_q = ft.TextField(label="Security Question", hint_text="e.g. First school or favourite teacher", dense=True, on_change=lambda e: setattr(sf_reg_q, "value", e.control.value))
         sf_reg_ans = ft.TextField(label="Security Answer", dense=True, on_change=lambda e: setattr(sf_reg_ans, "value", e.control.value))
@@ -410,6 +420,8 @@ class AuthView:
         btn_sf_reg = ft.ElevatedButton("Create Staff Account", icon=ft.Icons.BADGE, style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE))
 
         def do_staff_register(e):
+            if btn_sf_reg.disabled:
+                return
             alert_sf_reg.hide_alert()
             role_val = sf_reg_role.value
             dept_val = sf_reg_dept.value if (sf_reg_dept.visible and role_val in (UserRole.HOD.value, UserRole.COORDINATOR.value)) else None
@@ -443,42 +455,44 @@ class AuthView:
             btn_sf_reg.content = "Creating Account..."
             self.page.update()
 
-            try:
-                ok, msg, new_staff = AuthService.register_staff(
-                    username=user_val,
-                    full_name=name_val,
-                    role=role_val,
-                    department_id=dept_val,
-                    password=pass_val,
-                    security_question=q_val,
-                    security_answer=ans_val,
-                    security_code=code_val
-                )
-                if ok and new_staff:
-                    alert_sf_reg.show_alert(f"Staff account '{user_val}' created successfully! You can now log in.", is_error=False)
-                    show_feedback_message(self.page, "Staff account created successfully! You can now log in.", is_error=False)
-                    # Clear registration form
-                    sf_reg_user.value = ""
-                    sf_reg_name.value = ""
-                    sf_reg_pass.value = ""
-                    sf_reg_code.value = ""
-                    sf_reg_q.value = ""
-                    sf_reg_ans.value = ""
-                    # Keep login inputs clean (no prefilled credentials)
-                    sf_login_user.value = ""
-                    sf_login_pass.value = ""
-                    sf_login_code.value = ""
+            def register_staff():
+                try:
+                    ok, msg, new_staff = AuthService.register_staff(
+                        username=user_val,
+                        full_name=name_val,
+                        role=role_val,
+                        department_id=dept_val,
+                        password=pass_val,
+                        security_question=q_val,
+                        security_answer=ans_val,
+                        security_code=code_val
+                    )
+                    if ok and new_staff:
+                        alert_sf_reg.show_alert(f"Staff account '{user_val}' created successfully! You can now log in.", is_error=False)
+                        show_feedback_message(self.page, "Staff account created successfully! You can now log in.", is_error=False)
+                        sf_reg_user.value = ""
+                        sf_reg_name.value = ""
+                        sf_reg_pass.value = ""
+                        sf_reg_code.value = ""
+                        sf_reg_q.value = ""
+                        sf_reg_ans.value = ""
+                        sf_login_user.value = ""
+                        sf_login_pass.value = ""
+                        sf_login_code.value = ""
+                        self.page.update()
+                    else:
+                        alert_sf_reg.show_alert(msg, is_error=True)
+                        show_feedback_message(self.page, msg, is_error=True)
+                except Exception as ex:
+                    logger.warning("Staff registration failed (%s)", type(ex).__name__)
+                    alert_sf_reg.show_alert("Unable to create staff account. Please try again.", is_error=True)
+                    show_feedback_message(self.page, "Unable to create staff account. Please try again.", is_error=True)
+                finally:
+                    btn_sf_reg.disabled = False
+                    btn_sf_reg.content = "Create Staff Account"
                     self.page.update()
-                else:
-                    alert_sf_reg.show_alert(msg, is_error=True)
-                    show_feedback_message(self.page, msg, is_error=True)
-            except Exception as ex:
-                alert_sf_reg.show_alert("Unable to create staff account. Please try again.", is_error=True)
-                show_feedback_message(self.page, "Unable to create staff account. Please try again.", is_error=True)
-            finally:
-                btn_sf_reg.disabled = False
-                btn_sf_reg.content = "Create Staff Account"
-                self.page.update()
+
+            self.page.run_thread(register_staff)
 
         btn_sf_reg.on_click = do_staff_register
 
@@ -493,31 +507,56 @@ class AuthView:
             recov_btn = ft.ElevatedButton("Find Account", icon=ft.Icons.SEARCH)
 
             def on_recov_action(ev):
-                if not question_text.visible:
-                    # Step 1: Find question
-                    ok, msg, q = AuthService.get_student_security_question(recov_roll.value or "")
-                    if ok and q:
-                        question_text.value = f"Security Question: {q}"
-                        question_text.visible = True
-                        recov_ans.visible = True
-                        recov_new_pass.visible = True
-                        recov_btn.content = "Reset & Unlock"
-                        recov_btn.icon = ft.Icons.LOCK_RESET
-                        self.page.update()
-                    else:
-                        show_feedback_message(self.page, msg or "Account not found.", is_error=True)
-                else:
-                    # Step 2: Reset
-                    ok, msg = AuthService.reset_student_password(
-                        roll_number=recov_roll.value or "",
-                        security_answer=recov_ans.value or "",
-                        new_password=recov_new_pass.value or ""
-                    )
-                    if ok:
-                        show_feedback_message(self.page, msg, is_error=False)
-                        close_dialog(self.page, dlg)
-                    else:
-                        show_feedback_message(self.page, msg, is_error=True)
+                if recov_btn.disabled:
+                    return
+                finding_question = not question_text.visible
+                roll_val = recov_roll.value or ""
+                answer_val = recov_ans.value or ""
+                new_password_val = recov_new_pass.value or ""
+                recov_btn.disabled = True
+                recov_btn.content = "Looking up account…" if finding_question else "Resetting password…"
+                self.page.update()
+
+                def recover_student_password():
+                    succeeded = False
+                    try:
+                        if finding_question:
+                            ok, msg, question = AuthService.get_student_security_question(roll_val)
+                            if ok and question:
+                                question_text.value = f"Security Question: {question}"
+                                question_text.visible = True
+                                recov_ans.visible = True
+                                recov_new_pass.visible = True
+                                recov_btn.content = "Reset & Unlock"
+                                recov_btn.icon = ft.Icons.LOCK_RESET
+                                succeeded = True
+                            else:
+                                show_feedback_message(self.page, msg or "Account not found.", is_error=True)
+                        else:
+                            ok, msg = AuthService.reset_student_password(
+                                roll_number=roll_val,
+                                security_answer=answer_val,
+                                new_password=new_password_val
+                            )
+                            if ok:
+                                show_feedback_message(self.page, msg, is_error=False)
+                                close_dialog(self.page, dlg)
+                                succeeded = True
+                            else:
+                                show_feedback_message(self.page, msg, is_error=True)
+                    except Exception as exc:
+                        logger.warning("Student password recovery failed (%s)", type(exc).__name__)
+                        show_feedback_message(self.page, "Unable to complete password recovery. Please try again.", is_error=True)
+                    finally:
+                        recov_btn.disabled = False
+                        if not succeeded:
+                            recov_btn.content = "Find Account" if finding_question else "Reset & Unlock"
+                        try:
+                            self.page.update()
+                        except Exception:
+                            pass
+
+                self.page.run_thread(recover_student_password)
 
             recov_btn.on_click = on_recov_action
 
@@ -583,6 +622,7 @@ class AuthView:
                         ft.Container(st_reg_year, col={"xs": 12, "sm": 6}),
                     ]),
                     st_reg_pass,
+                    ft.Text("Minimum 8 characters with uppercase, lowercase, number and symbol.", size=11, color=colors["text_muted"]),
                     ft.ResponsiveRow(controls=[
                         ft.Container(st_reg_q, col={"xs": 12, "sm": 6}),
                         ft.Container(st_reg_ans, col={"xs": 12, "sm": 6}),
@@ -637,6 +677,7 @@ class AuthView:
                         ft.Container(sf_reg_user, col={"xs": 12, "sm": 6}),
                     ]),
                     sf_reg_pass,
+                    ft.Text("Minimum 8 characters.", size=11, color=colors["text_muted"]),
                     sf_reg_code,
                     ft.ResponsiveRow(controls=[
                         ft.Container(sf_reg_q, col={"xs": 12, "sm": 6}),
@@ -650,32 +691,68 @@ class AuthView:
             padding=ft.padding.symmetric(horizontal=16, vertical=20)
         )
 
-        tabs = ft.Tabs(
-            selected_index=initial_tab,
-            length=4,
-            content=ft.Column(
-                expand=True,
-                controls=[
-                    ft.TabBar(
-                        scrollable=True,
-                        tab_alignment=ft.TabAlignment.START,
-                        tabs=[
-                            ft.Tab(label="Student Login", icon=ft.Icons.SCHOOL),
-                            ft.Tab(label="Student Register", icon=ft.Icons.PERSON_ADD),
-                            ft.Tab(label="Staff Login", icon=ft.Icons.ADMIN_PANEL_SETTINGS),
-                            ft.Tab(label="Staff Register", icon=ft.Icons.SECURITY),
-                        ]
-                    ),
-                    ft.TabBarView(
-                        expand=True,
-                        controls=[tab1_content, tab2_content, tab3_content, tab4_content]
-                    )
-                ]
-            ),
-            expand=True
-        )
+        raw_width = getattr(self.page, "width", None)
+        screen_width = raw_width if isinstance(raw_width, (int, float)) else 1280
+        is_compact = screen_width < 1024
 
-        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
+        # On narrow screens, keep portal selection and action selection on two
+        # short tab bars so none of the four auth routes is clipped.
+        if screen_width < 1150:
+            student_tabs = ft.Tabs(
+                selected_index=initial_tab % 2,
+                length=2,
+                animation_duration=ft.Duration(milliseconds=180),
+                content=ft.Column(expand=True, controls=[
+                    ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
+                        ft.Tab(label="Login", icon=ft.Icons.LOGIN),
+                        ft.Tab(label="Create Account", icon=ft.Icons.PERSON_ADD),
+                    ]),
+                    ft.TabBarView(expand=True, controls=[tab1_content, tab2_content]),
+                ]),
+                expand=True,
+            )
+            staff_tabs = ft.Tabs(
+                selected_index=initial_tab % 2,
+                length=2,
+                animation_duration=ft.Duration(milliseconds=180),
+                content=ft.Column(expand=True, controls=[
+                    ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
+                        ft.Tab(label="Login", icon=ft.Icons.LOGIN),
+                        ft.Tab(label="Create Account", icon=ft.Icons.PERSON_ADD),
+                    ]),
+                    ft.TabBarView(expand=True, controls=[tab3_content, tab4_content]),
+                ]),
+                expand=True,
+            )
+            tabs = ft.Tabs(
+                selected_index=1 if initial_tab >= 2 else 0,
+                length=2,
+                animation_duration=ft.Duration(milliseconds=180),
+                content=ft.Column(expand=True, controls=[
+                    ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
+                        ft.Tab(label="Student Portal", icon=ft.Icons.SCHOOL),
+                        ft.Tab(label="Staff Portal", icon=ft.Icons.ADMIN_PANEL_SETTINGS),
+                    ]),
+                    ft.TabBarView(expand=True, controls=[student_tabs, staff_tabs]),
+                ]),
+                expand=True,
+            )
+        else:
+            tabs = ft.Tabs(
+                selected_index=initial_tab,
+                length=4,
+                animation_duration=ft.Duration(milliseconds=180),
+                content=ft.Column(expand=True, controls=[
+                    ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
+                        ft.Tab(label="Student Login", icon=ft.Icons.SCHOOL),
+                        ft.Tab(label="Student Register", icon=ft.Icons.PERSON_ADD),
+                        ft.Tab(label="Staff Login", icon=ft.Icons.ADMIN_PANEL_SETTINGS),
+                        ft.Tab(label="Staff Register", icon=ft.Icons.SECURITY),
+                    ]),
+                    ft.TabBarView(expand=True, controls=[tab1_content, tab2_content, tab3_content, tab4_content]),
+                ]),
+                expand=True,
+            )
 
         card_header = ft.Container(
             content=ft.Row(

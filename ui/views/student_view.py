@@ -7,6 +7,8 @@ private anonymous tracking, hostel status, and feedback rating.
 import os
 import uuid
 import logging
+import time
+import threading
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import flet as ft
@@ -73,26 +75,62 @@ class StudentView:
         self.department_id = student["department_id"]
         self.selected_tab_index = initial_tab
         self.cached_complaints = None
+        self._dashboard_loading = False
+        self._dashboard_error: Optional[str] = None
+        self._complaint_query_lock = threading.Lock()
+        self._complaint_query_event: Optional[threading.Event] = None
+        self._complaint_query_error: Optional[str] = None
         self.active_container = ft.Container(expand=True)
         self._tab_cache: Dict[int, ft.Control] = {}
-        self.categories = []
-        self.subcategories_by_cat = {}
-        self.locations = []
+        self._reference_loading = False
+        self._reference_error = None
+        from services.cache_service import CacheService
+        reference_data = CacheService.get_cached_categories_and_subcategories()
+        self.categories, self.subcategories_by_cat, self.locations = reference_data or ([], {}, [])
 
         # Page-level attachment state + singleton FilePicker (see page_file_services.py).
         # Uses session.store for persistence across WebSocket reconnects.
         ensure_complaint_attachment_state(self.page)
         clear_stale_picker_pending(self.page)
         self.file_picker = get_complaint_file_picker(self.page)
-        if not self.categories:
-            from services.cache_service import CacheService
-            self.categories, self.subcategories_by_cat, self.locations = CacheService.get_categories_and_subcategories()
-
     def invalidate_tab_cache(self, index: Optional[int] = None):
         if index is None:
             self._tab_cache.clear()
         else:
             self._tab_cache.pop(index, None)
+
+    def _load_complaints(self, force: bool = False) -> List[Dict[str, Any]]:
+        """Single-flight complaint fetch shared by dashboard and complaint list."""
+        with self._complaint_query_lock:
+            if self.cached_complaints is not None and not force:
+                return self.cached_complaints
+            event = self._complaint_query_event
+            if event is None or event.is_set():
+                event = threading.Event()
+                self._complaint_query_event = event
+                self._complaint_query_error = None
+                is_owner = True
+            else:
+                is_owner = False
+
+        if is_owner:
+            try:
+                self.cached_complaints = ComplaintService.get_complaints_for_user(
+                    role="Student",
+                    user_id=self.student_id,
+                    department_id=self.department_id,
+                    raise_errors=True,
+                ) or []
+            except Exception as exc:
+                self._complaint_query_error = type(exc).__name__
+            finally:
+                event.set()
+        else:
+            event.wait()
+
+        if self._complaint_query_error:
+            raise RuntimeError("Student complaints are unavailable")
+        return self.cached_complaints or []
 
     def render(self) -> ft.Control:
         self._switch_view(self.selected_tab_index)
@@ -100,32 +138,23 @@ class StudentView:
 
     def _trigger_progressive_dashboard_load(self):
         """Asynchronously loads complaints in background thread and updates dashboard in-place."""
-        if getattr(self, "_dashboard_loading", False):
+        if self._dashboard_loading:
             return
         self._dashboard_loading = True
+        self._dashboard_error = None
 
         import threading
         def _fetch_worker():
+            started_at = time.perf_counter()
             try:
-                cmps = ComplaintService.get_complaints_for_user(
-                    role="Student",
-                    user_id=self.student_id,
-                    department_id=self.department_id
-                )
-                self.cached_complaints = cmps or []
+                self._load_complaints()
+                self._dashboard_error = None
+                logger.info("Student dashboard complaints loaded in %.3fs", time.perf_counter() - started_at)
+            except Exception as exc:
+                self._dashboard_error = "Your complaints could not be loaded. Check your connection and retry."
+                logger.warning("Student dashboard data unavailable (%s)", type(exc).__name__)
+            finally:
                 self._dashboard_loading = False
-                self.invalidate_tab_cache(0)
-                if self.selected_tab_index == 0:
-                    self.active_container.content = self._render_dashboard()
-                    try:
-                        self.page.update()
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.error("Error progressively loading student complaints: %s", e)
-                self._dashboard_loading = False
-                if self.cached_complaints is None:
-                    self.cached_complaints = []
                 self.invalidate_tab_cache(0)
                 if self.selected_tab_index == 0:
                     self.active_container.content = self._render_dashboard()
@@ -137,9 +166,65 @@ class StudentView:
         threading.Thread(target=_fetch_worker, daemon=True).start()
 
     def _ensure_reference_data_loaded(self):
-        if not self.categories:
-            from services.cache_service import CacheService
-            self.categories, self.subcategories_by_cat, self.locations = CacheService.get_categories_and_subcategories()
+        if self.categories:
+            return True
+
+        from services.cache_service import CacheService
+        cached = CacheService.get_cached_categories_and_subcategories()
+        if cached:
+            self.categories, self.subcategories_by_cat, self.locations = cached
+            return True
+
+        if not self._reference_loading:
+            import threading
+            self._reference_loading = True
+            self._reference_error = None
+
+            def load_reference_data():
+                try:
+                    data = CacheService.get_categories_and_subcategories()
+                    self.categories, self.subcategories_by_cat, self.locations = data
+                except Exception as exc:
+                    self._reference_error = type(exc).__name__
+                finally:
+                    self._reference_loading = False
+                    self.invalidate_tab_cache(1)
+                    self.invalidate_tab_cache(2)
+                    if self.selected_tab_index in (1, 2):
+                        if self._reference_error:
+                            self.active_container.content = self._reference_loading_view()
+                        elif self.selected_tab_index == 1:
+                            self.active_container.content = self._render_new_complaint()
+                        else:
+                            self.active_container.content = self._render_my_complaints()
+                        try:
+                            self.page.update()
+                        except Exception:
+                            pass
+
+            threading.Thread(target=load_reference_data, daemon=True).start()
+        return False
+
+    def _reference_loading_view(self) -> ft.Control:
+        colors = get_theme_colors(AppState.is_dark_mode)
+        message = "Reference data is temporarily unavailable. Retry to load the form." if self._reference_error else "Loading complaint form options…"
+        controls: List[ft.Control] = [
+            ft.ProgressRing(width=22, height=22, stroke_width=2.5, color=colors["primary"]) if not self._reference_error else ft.Icon(ft.Icons.ERROR_OUTLINE, color="#dc2626"),
+            ft.Text(message, size=14, color=colors["text_muted"]),
+        ]
+        if self._reference_error:
+            def retry(_):
+                self._reference_error = None
+                self._ensure_reference_data_loaded()
+                self.active_container.content = self._reference_loading_view()
+                self.page.update()
+            controls.append(ft.ElevatedButton("Retry", on_click=retry))
+        return ft.Container(
+            content=ft.Column(controls=controls, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=14),
+            alignment=ft.Alignment.CENTER,
+            padding=32,
+            expand=True,
+        )
 
     def _switch_view(self, index: int):
         self.selected_tab_index = index
@@ -284,16 +369,36 @@ class StudentView:
                 run_spacing=12
             )
 
-            loading_recent = ft.Container(
-                content=ft.Row([
-                    ft.ProgressRing(width=20, height=20, stroke_width=2.5, color=colors["primary"]),
-                    ft.Text("Loading your recent grievances...", size=13, color=colors["text_muted"])
-                ], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
-                padding=28,
-                border_radius=12,
-                bgcolor=colors.get("card_bg", colors.get("surface", "#ffffff")),
-                border=ft.border.all(1, colors.get("border", "#e2e8f0"))
-            )
+            if self._dashboard_error:
+                def retry_dashboard(_):
+                    self._dashboard_error = None
+                    self.invalidate_tab_cache(0)
+                    self._trigger_progressive_dashboard_load()
+                    self.active_container.content = self._render_dashboard()
+                    self.page.update()
+
+                loading_recent = ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.ERROR_OUTLINE, color="#dc2626"),
+                        ft.Text(self._dashboard_error, size=13, color=colors["text_muted"], expand=True),
+                        ft.ElevatedButton("Retry", icon=ft.Icons.REFRESH, on_click=retry_dashboard),
+                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=10, wrap=True),
+                    padding=24,
+                    border_radius=12,
+                    bgcolor=colors.get("card_bg", colors.get("surface", "#ffffff")),
+                    border=ft.border.all(1, colors.get("border", "#e2e8f0"))
+                )
+            else:
+                loading_recent = ft.Container(
+                    content=ft.Row([
+                        ft.ProgressRing(width=20, height=20, stroke_width=2.5, color=colors["primary"]),
+                        ft.Text("Loading your recent grievances...", size=13, color=colors["text_muted"])
+                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
+                    padding=28,
+                    border_radius=12,
+                    bgcolor=colors.get("card_bg", colors.get("surface", "#ffffff")),
+                    border=ft.border.all(1, colors.get("border", "#e2e8f0"))
+                )
 
             return ft.Column(
                 controls=[
@@ -399,7 +504,8 @@ class StudentView:
     # TAB 1: NEW COMPLAINT WIZARD
     # -------------------------------------------------------------------------
     def _render_new_complaint(self) -> ft.Control:
-        self._ensure_reference_data_loaded()
+        if not self._ensure_reference_data_loaded():
+            return self._reference_loading_view()
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
@@ -870,6 +976,8 @@ class StudentView:
         )
 
         def submit_form(e):
+            if submit_btn.disabled:
+                return
             val_desc, err = validate_description(desc_field.value or "")
             if not val_desc:
                 show_alert(err, is_error=True)
@@ -926,66 +1034,75 @@ class StudentView:
 
             loc_id = location_dropdown.value if location_dropdown.value != "OTHER" else None
             custom_loc = custom_loc_field.value if location_dropdown.value == "OTHER" else None
+            title_val = title_field.value or ""
+            category_id_val = category_dropdown.value
+            priority_val = priority_dropdown.value or "Low"
+            anonymous_val = bool(anonymous_checkbox.value)
+            hostel_val = bool(hostel_checkbox.value)
+            selected_files = list(_get_selected_files(self.page))
 
             submit_btn.disabled = True
             submit_btn.content = ft.Text("Submitting Grievance...")
             alert_box.visible = False
             self.page.update()
 
-            try:
-                ok, msg, created_comp = ComplaintService.submit_complaint(
-                    student_id=self.student_id,
-                    title=title_field.value or "",
-                    description=final_desc,
-                    department_id=self.department_id,
-                    category_id=category_dropdown.value,
-                    subcategory_id=subcat_id,
-                    location_id=loc_id,
-                    priority=priority_dropdown.value or "Low",
-                    is_anonymous=anonymous_checkbox.value,
-                    is_hostel=hostel_checkbox.value,
-                    location_custom=custom_loc,
-                    category_custom=custom_cat_val if is_other_cat else None,
-                    subcategory_custom=custom_cat_val if is_other_sub else None
-                )
+            def submit_complaint():
+                try:
+                    ok, msg, created_comp = ComplaintService.submit_complaint(
+                        student_id=self.student_id,
+                        title=title_val,
+                        description=final_desc,
+                        department_id=self.department_id,
+                        category_id=category_id_val,
+                        subcategory_id=subcat_id,
+                        location_id=loc_id,
+                        priority=priority_val,
+                        is_anonymous=anonymous_val,
+                        is_hostel=hostel_val,
+                        location_custom=custom_loc,
+                        category_custom=custom_cat_val if is_other_cat else None,
+                        subcategory_custom=custom_cat_val if is_other_sub else None
+                    )
 
-                if ok and created_comp:
-                    cid = created_comp["complaint_id"]
-                    for f_info in _get_selected_files(self.page):
-                        try:
-                            StorageService.upload_attachment(
-                                complaint_id=cid,
-                                local_file_path=f_info.get("path"),
-                                original_filename=f_info.get("name"),
-                                file_bytes=f_info.get("bytes")
-                            )
-                            # Once stored in Supabase, remove temporary disk copy
-                            if f_info.get("is_temp") and f_info.get("path"):
-                                try:
-                                    if os.path.exists(f_info["path"]):
-                                        os.remove(f_info["path"])
-                                except Exception:
-                                    pass
-                        except Exception as up_err:
-                            logger.error("Error uploading attachment to Supabase: %s", up_err)
+                    if ok and created_comp:
+                        cid = created_comp["complaint_id"]
+                        for f_info in selected_files:
+                            try:
+                                StorageService.upload_attachment(
+                                    complaint_id=cid,
+                                    local_file_path=f_info.get("path"),
+                                    original_filename=f_info.get("name"),
+                                    file_bytes=f_info.get("bytes")
+                                )
+                                if f_info.get("is_temp") and f_info.get("path"):
+                                    try:
+                                        if os.path.exists(f_info["path"]):
+                                            os.remove(f_info["path"])
+                                    except Exception:
+                                        pass
+                            except Exception as up_err:
+                                logger.warning("Attachment upload failed (%s)", type(up_err).__name__)
 
-                    _set_selected_files(self.page, [])
-                    clear_complaint_draft(self.page)
-                    show_feedback_message(self.page, f"Complaint #{cid} registered successfully!", is_error=False)
-                    self.cached_complaints = None
-                    self.invalidate_tab_cache()
-                    self._switch_view(2)  # Switch to My Complaints
-                else:
+                        _set_selected_files(self.page, [])
+                        clear_complaint_draft(self.page)
+                        show_feedback_message(self.page, f"Complaint #{cid} registered successfully!", is_error=False)
+                        self.cached_complaints = None
+                        self.invalidate_tab_cache()
+                        self._switch_view(2)
+                    else:
+                        submit_btn.disabled = False
+                        submit_btn.content = ft.Text("Submit Complaint")
+                        show_alert(msg, is_error=True)
+                        show_feedback_message(self.page, msg, is_error=True)
+                except Exception as ex:
                     submit_btn.disabled = False
                     submit_btn.content = ft.Text("Submit Complaint")
-                    show_alert(msg, is_error=True)
-                    show_feedback_message(self.page, msg, is_error=True)
-            except Exception as ex:
-                submit_btn.disabled = False
-                submit_btn.content = ft.Text("Submit Complaint")
-                err_msg = "Unable to submit grievance. Please verify your connection."
-                show_alert(err_msg, is_error=True)
-                show_feedback_message(self.page, err_msg, is_error=True)
+                    err_msg = "Unable to submit grievance. Please verify your connection."
+                    show_alert(err_msg, is_error=True)
+                    show_feedback_message(self.page, err_msg, is_error=True)
+                    logger.warning("Student complaint submission failed (%s)", type(ex).__name__)
+
+            self.page.run_thread(submit_complaint)
 
         submit_btn.on_click = submit_form
 
@@ -1112,7 +1229,8 @@ class StudentView:
     # TAB 2: MY COMPLAINTS & EDITING
     # -------------------------------------------------------------------------
     def _render_my_complaints(self) -> ft.Control:
-        self._ensure_reference_data_loaded()
+        if not self._ensure_reference_data_loaded():
+            return self._reference_loading_view()
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
@@ -1166,6 +1284,7 @@ class StudentView:
         )
 
         complaints_container = ft.Column(spacing=8)
+        complaint_list_loading = [False]
 
         def update_subcat_options(c_val=None):
             if c_val is None:
@@ -1190,13 +1309,7 @@ class StudentView:
             self.page.update()
 
         def load_data(force: bool = False):
-            if force or self.cached_complaints is None:
-                self.cached_complaints = ComplaintService.get_complaints_for_user(
-                    role="Student",
-                    user_id=self.student_id,
-                    department_id=self.department_id
-                )
-            return self.cached_complaints
+            return self._load_complaints(force=force)
 
         def reset_filters(e=None):
             search_field.value = ""
@@ -1208,7 +1321,58 @@ class StudentView:
             refresh_list(force_reload=False)
 
         def refresh_list(force_reload: bool = False):
-            complaints = load_data(force=force_reload)
+            if complaint_list_loading[0]:
+                return
+            if force_reload or self.cached_complaints is None:
+                complaint_list_loading[0] = True
+                complaints_container.controls = [
+                    ft.Container(
+                        content=ft.Row(
+                            controls=[ft.ProgressRing(width=20, height=20, stroke_width=2, color=colors["primary"]), ft.Text("Loading your complaints…", color=colors["text_muted"])],
+                            alignment=ft.MainAxisAlignment.CENTER,
+                            spacing=10,
+                        ),
+                        padding=24,
+                        alignment=ft.Alignment.CENTER,
+                    )
+                ]
+                self.page.update()
+
+                def fetch_complaints():
+                    try:
+                        load_data(force=force_reload)
+                        render_list()
+                    except Exception as exc:
+                        logger.warning("Student complaint list unavailable (%s)", type(exc).__name__)
+                        complaints_container.controls = [
+                            ft.Container(
+                                content=ft.Column(
+                                    controls=[
+                                        ft.Icon(ft.Icons.ERROR_OUTLINE, color="#dc2626"),
+                                        ft.Text("Your complaints could not be loaded. Check your connection and retry.", color=colors["text_muted"], text_align=ft.TextAlign.CENTER),
+                                        ft.ElevatedButton("Retry", icon=ft.Icons.REFRESH, on_click=lambda _: refresh_list(force_reload=True)),
+                                    ],
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=10,
+                                ),
+                                padding=24,
+                                alignment=ft.Alignment.CENTER,
+                            )
+                        ]
+                        try:
+                            self.page.update()
+                        except Exception:
+                            pass
+
+                    finally:
+                        complaint_list_loading[0] = False
+
+                self.page.run_thread(fetch_complaints)
+                return
+            render_list()
+
+        def render_list():
+            complaints = load_data(force=False) or []
             query = (search_field.value or "").strip().lower()
             st_val = (status_filter.value or "ALL").strip()
             pr_val = (priority_filter.value or "ALL").strip()
@@ -1248,19 +1412,35 @@ class StudentView:
                 )
 
                 def do_delete(ev):
+                    if confirm_btn.disabled:
+                        return
                     confirm_btn.disabled = True
                     confirm_btn.content = ft.Text("Deleting...")
                     self.page.update()
-                    ok, msg = ComplaintService.delete_complaint_by_student(cid, self.student_id)
-                    close_dialog(self.page, del_dlg)
-                    if ok:
-                        show_feedback_message(self.page, msg, is_error=False)
-                        self.cached_complaints = None
-                        self.invalidate_tab_cache()
-                        refresh_list(force_reload=True)
-                    else:
-                        show_feedback_message(self.page, msg, is_error=True)
-                        self.page.update()
+
+                    def delete_complaint():
+                        try:
+                            ok, msg = ComplaintService.delete_complaint_by_student(cid, self.student_id)
+                            close_dialog(self.page, del_dlg)
+                            if ok:
+                                show_feedback_message(self.page, msg, is_error=False)
+                                self.cached_complaints = None
+                                self.invalidate_tab_cache()
+                                refresh_list(force_reload=True)
+                            else:
+                                show_feedback_message(self.page, msg, is_error=True)
+                        except Exception as exc:
+                            logger.warning("Student complaint delete failed (%s)", type(exc).__name__)
+                            show_feedback_message(self.page, "Unable to delete complaint. Please try again.", is_error=True)
+                        finally:
+                            confirm_btn.disabled = False
+                            confirm_btn.content = ft.Text("Yes, Delete")
+                            try:
+                                self.page.update()
+                            except Exception:
+                                pass
+
+                    self.page.run_thread(delete_complaint)
 
                 confirm_btn.on_click = do_delete
 
@@ -1555,28 +1735,41 @@ class StudentView:
                     )
 
                     def do_save_edit(ev):
+                        if save_edit_btn.disabled:
+                            return
                         save_edit_btn.disabled = True
                         save_edit_btn.content = ft.Text("Saving...")
                         self.page.update()
+                        rating_to_save = edit_rating_val[0]
+                        comment_to_save = edit_comment_field.value
 
-                        ok, msg = FeedbackService.edit_feedback(
-                            student_id=self.student_id,
-                            complaint_id=cid,
-                            new_rating=edit_rating_val[0],
-                            new_comment=edit_comment_field.value
-                        )
+                        def save_feedback_edit():
+                            try:
+                                ok, msg = FeedbackService.edit_feedback(
+                                    student_id=self.student_id,
+                                    complaint_id=cid,
+                                    new_rating=rating_to_save,
+                                    new_comment=comment_to_save
+                                )
+                                if ok:
+                                    show_feedback_message(self.page, msg, is_error=False)
+                                    close_dialog(self.page, detail_dlg)
+                                    self.invalidate_tab_cache(3)
+                                    self._switch_view(3)
+                                else:
+                                    show_feedback_message(self.page, msg, is_error=True)
+                            except Exception as exc:
+                                logger.warning("Feedback update failed (%s)", type(exc).__name__)
+                                show_feedback_message(self.page, "Unable to update feedback. Please try again.", is_error=True)
+                            finally:
+                                save_edit_btn.disabled = False
+                                save_edit_btn.content = ft.Text("Save Changes")
+                                try:
+                                    self.page.update()
+                                except Exception:
+                                    pass
 
-                        save_edit_btn.disabled = False
-                        save_edit_btn.content = ft.Text("Save Changes")
-
-                        if ok:
-                            show_feedback_message(self.page, msg, is_error=False)
-                            close_dialog(self.page, detail_dlg)
-                            self.invalidate_tab_cache(3)
-                            self._switch_view(3)
-                        else:
-                            show_feedback_message(self.page, msg, is_error=True)
-                            self.page.update()
+                        self.page.run_thread(save_feedback_edit)
 
                     save_edit_btn.on_click = do_save_edit
 
@@ -1652,32 +1845,45 @@ class StudentView:
                 )
 
                 def do_submit_feedback(ev):
+                    if submit_fb_btn.disabled:
+                        return
                     if rating_val[0] < 1:
                         show_feedback_message(self.page, "Please select a star rating (1–5).", is_error=True)
                         return
                     submit_fb_btn.disabled = True
                     submit_fb_btn.content = ft.Text("Submitting...")
                     self.page.update()
+                    rating_to_submit = rating_val[0]
+                    comment_to_submit = comment_field.value
 
-                    ok, msg, fb = FeedbackService.submit_feedback_v2(
-                        student_id=self.student_id,
-                        department_id=self.department_id,
-                        complaint_id=cid,
-                        rating=rating_val[0],
-                        comment=comment_field.value
-                    )
+                    def submit_feedback():
+                        try:
+                            ok, msg, fb = FeedbackService.submit_feedback_v2(
+                                student_id=self.student_id,
+                                department_id=self.department_id,
+                                complaint_id=cid,
+                                rating=rating_to_submit,
+                                comment=comment_to_submit
+                            )
+                            if ok:
+                                show_feedback_message(self.page, msg, is_error=False)
+                                close_dialog(self.page, detail_dlg)
+                                self.invalidate_tab_cache(3)
+                                self._switch_view(3)
+                            else:
+                                show_feedback_message(self.page, msg, is_error=True)
+                        except Exception as exc:
+                            logger.warning("Feedback submission failed (%s)", type(exc).__name__)
+                            show_feedback_message(self.page, "Unable to submit feedback. Please try again.", is_error=True)
+                        finally:
+                            submit_fb_btn.disabled = False
+                            submit_fb_btn.content = ft.Text("Submit Feedback")
+                            try:
+                                self.page.update()
+                            except Exception:
+                                pass
 
-                    submit_fb_btn.disabled = False
-                    submit_fb_btn.content = ft.Text("Submit Feedback")
-
-                    if ok:
-                        show_feedback_message(self.page, msg, is_error=False)
-                        close_dialog(self.page, detail_dlg)
-                        self.invalidate_tab_cache(3)
-                        self._switch_view(3)
-                    else:
-                        show_feedback_message(self.page, msg, is_error=True)
-                        self.page.update()
+                    self.page.run_thread(submit_feedback)
 
                 submit_fb_btn.on_click = do_submit_feedback
 

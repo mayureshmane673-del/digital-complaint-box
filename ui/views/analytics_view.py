@@ -3,11 +3,15 @@ ui/views/analytics_view.py: Department comparisons, resolution duration metrics,
 """
 
 from typing import Optional
+import logging
+import time
 import flet as ft
 from services.analytics_service import AnalyticsService
 from ui.theme import get_theme_colors, get_card_shadow
 from ui.state import AppState
 from models.user import UserRole
+
+logger = logging.getLogger(__name__)
 
 
 class AnalyticsView:
@@ -15,12 +19,67 @@ class AnalyticsView:
         self.page = page
         self.role = role
         self.department_id = department_id
+        self._loading = False
 
     def render(self) -> ft.Control:
+        colors = get_theme_colors(AppState.is_dark_mode)
+        holder = ft.Container(
+            content=ft.Row(
+                controls=[ft.ProgressRing(width=22, height=22, stroke_width=2, color=colors["primary"]), ft.Text("Loading analytics and feedback…", color=colors["text_muted"])],
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=10,
+            ),
+            expand=True,
+            alignment=ft.Alignment.CENTER,
+        )
+        self._load_into(holder)
+        return holder
+
+    def _load_into(self, holder: ft.Container):
+        if self._loading:
+            return
+        self._loading = True
+
+        def load_analytics():
+            started_at = time.perf_counter()
+            try:
+                from concurrent.futures import ThreadPoolExecutor
+                from services.feedback_service import FeedbackService
+
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    department_future = executor.submit(AnalyticsService.get_department_breakdown)
+                    feedback_future = executor.submit(FeedbackService.get_feedback_for_scope, self.role, self.department_id)
+                    dept_breakdown = department_future.result()
+                    feedbacks = feedback_future.result()
+
+                holder.content = self._render_loaded_view(dept_breakdown, feedbacks)
+                logger.info("Analytics view data loaded in %.3fs", time.perf_counter() - started_at)
+            except Exception as exc:
+                logger.warning("Analytics view data unavailable (%s)", type(exc).__name__)
+                colors = get_theme_colors(AppState.is_dark_mode)
+                holder.content = ft.Column(
+                    controls=[
+                        ft.Icon(ft.Icons.ERROR_OUTLINE, color="#dc2626"),
+                        ft.Text("Analytics could not be loaded. Check your connection and retry.", color=colors["text_muted"], text_align=ft.TextAlign.CENTER),
+                        ft.ElevatedButton("Retry", icon=ft.Icons.REFRESH, on_click=lambda _: self._load_into(holder)),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=12,
+                    expand=True,
+                )
+            finally:
+                self._loading = False
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+
+        self.page.run_thread(load_analytics)
+
+    def _render_loaded_view(self, dept_breakdown, feedbacks) -> ft.Control:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
-
-        dept_breakdown = AnalyticsService.get_department_breakdown()
 
         rows = []
         mobile_cards = []
@@ -121,9 +180,6 @@ class AnalyticsView:
         )
 
         # Department-Scoped Student Feedback Reviews Section
-        from services.feedback_service import FeedbackService
-        feedbacks = FeedbackService.get_feedback_for_scope(self.role, self.department_id)
-
         feedback_cards = []
         for fb in feedbacks:
             cid = fb.get("complaint_id")

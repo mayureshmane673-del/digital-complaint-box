@@ -6,8 +6,11 @@ Eliminates repeated Supabase round trips for static and semi-static data.
 
 import time
 import threading
+import logging
 from typing import Dict, Any, List, Optional, Tuple
 from collections import defaultdict
+
+logger = logging.getLogger("complaint_box.cache")
 
 
 class CacheService:
@@ -33,6 +36,7 @@ class CacheService:
     _categories: Optional[List[Dict[str, Any]]] = None
     _locations: Optional[List[Dict[str, Any]]] = None
     _subcategories_by_cat: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    _categories_refresh_lock = threading.Lock()
 
     _security_codes_cache: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}
     _issue_groups_cache: Dict[Tuple[Optional[str], Optional[str], Optional[bool]], Tuple[float, List[Dict[str, Any]]]] = {}
@@ -225,6 +229,13 @@ class CacheService:
             if cls._categories is not None and cls._subcategories_by_cat is not None and cls._locations is not None and not force_refresh:
                 return cls._categories, cls._subcategories_by_cat, cls._locations
 
+        # Serialize refreshes without holding the global cache lock over network
+        # requests. Other cached reads/auth checks can proceed while Supabase is slow.
+        with cls._categories_refresh_lock:
+            with cls._lock:
+                if cls._categories is not None and cls._subcategories_by_cat is not None and cls._locations is not None and not force_refresh:
+                    return cls._categories, cls._subcategories_by_cat, cls._locations
+
             from models.complaint import PRACTICAL_SUBCATEGORIES, get_default_priority
             from database.supabase_client import get_trusted_backend_client, get_supabase_client
             client = get_trusted_backend_client() or get_supabase_client()
@@ -294,10 +305,19 @@ class CacheService:
                 sub_map[cid] = canonical_items
                 sub_map[cat_key] = canonical_items
 
-            cls._categories = categories
-            cls._locations = locations
-            cls._subcategories_by_cat = dict(sub_map)
+            with cls._lock:
+                cls._categories = categories
+                cls._locations = locations
+                cls._subcategories_by_cat = dict(sub_map)
 
+                return cls._categories, cls._subcategories_by_cat, cls._locations
+
+    @classmethod
+    def get_cached_categories_and_subcategories(cls) -> Optional[Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]]]]:
+        """Return warmed reference data without starting or waiting for network I/O."""
+        with cls._lock:
+            if cls._categories is None or cls._subcategories_by_cat is None or cls._locations is None:
+                return None
             return cls._categories, cls._subcategories_by_cat, cls._locations
 
     # -------------------------------------------------------------------------
@@ -535,11 +555,18 @@ class CacheService:
         """Asynchronously pre-warms departments and categories reference cache."""
         import threading
         def _warm():
+            started_at = time.perf_counter()
             try:
                 cls.get_departments()
-                cls.get_categories_and_subcategories()
-            except Exception:
-                pass
+                categories, _, locations = cls.get_categories_and_subcategories()
+                logger.info(
+                    "Reference cache ready categories=%d locations=%d elapsed_s=%.3f",
+                    len(categories),
+                    len(locations),
+                    time.perf_counter() - started_at,
+                )
+            except Exception as exc:
+                logger.warning("Reference cache warm failed (%s)", type(exc).__name__)
         threading.Thread(target=_warm, daemon=True).start()
 
     @classmethod

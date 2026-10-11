@@ -11,6 +11,37 @@ COLLEGE_BUILDING_IMG = "/images/college_building.jpg"
 COLLEGE_STATUE_IMG = "/images/college_statue.jpg"
 
 
+def _complaint_lifecycle_strip(compact: bool = False) -> ft.Control:
+    """Small, static lifecycle guide that stays inexpensive on mobile GPUs."""
+    steps = [
+        (ft.Icons.DESCRIPTION_OUTLINED, "Submitted", "#2563eb"),
+        (ft.Icons.ACCOUNT_BALANCE_OUTLINED, "Department review", "#d97706"),
+        (ft.Icons.TASK_ALT, "Resolved", "#059669"),
+    ]
+    controls = []
+    for index, (icon, label, color) in enumerate(steps):
+        controls.append(
+            ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Icon(icon, size=15 if compact else 17, color=color),
+                        ft.Text(label, size=9 if compact else 10, color=ft.Colors.WHITE, weight=ft.FontWeight.W_600, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    ],
+                    spacing=5,
+                    alignment=ft.MainAxisAlignment.CENTER,
+                ),
+                bgcolor=ft.Colors.with_opacity(0.18, ft.Colors.WHITE),
+                border=ft.Border.all(1, ft.Colors.with_opacity(0.2, ft.Colors.WHITE)),
+                border_radius=9,
+                padding=ft.padding.symmetric(horizontal=7, vertical=7),
+                expand=True,
+            )
+        )
+        if index < len(steps) - 1:
+            controls.append(ft.Icon(ft.Icons.ARROW_FORWARD, size=13, color="#bfdbfe"))
+    return ft.Row(controls=controls, spacing=5, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+
 def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compact: bool = False) -> ft.Control:
     """
     Builds the authentic campus visual panel for the login screen.
@@ -58,7 +89,8 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                                     bgcolor=ft.Colors.with_opacity(0.35, ft.Colors.WHITE),
                                     border_radius=6,
                                     padding=ft.padding.symmetric(horizontal=6, vertical=2)
-                                )
+                                ),
+                                _complaint_lifecycle_strip(compact=True),
                             ],
                             spacing=4,
                             alignment=ft.MainAxisAlignment.CENTER
@@ -67,7 +99,7 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                 ]
             ),
             border_radius=14,
-            height=160,
+            height=198,
             margin=ft.margin.only(bottom=8)
         )
 
@@ -124,6 +156,7 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                                 color="#e2e8f0",
                                 height=1.4
                             ),
+                            _complaint_lifecycle_strip(),
                             ft.Container(expand=True),
                             # Highlights
                             ft.Column(

@@ -107,6 +107,8 @@ class ForcePasswordChangeView:
         )
 
         def handle_submit(e):
+            if submit_btn.disabled:
+                return
             curr_val = (curr_pass_field.value or "").strip()
             new_val = (new_pass_field.value or "").strip()
             conf_val = (confirm_pass_field.value or "").strip()
@@ -114,40 +116,58 @@ class ForcePasswordChangeView:
             if not curr_val:
                 show_alert("Current temporary password is required.", is_error=True)
                 return
-
             if not new_val:
                 show_alert("New password is required.", is_error=True)
                 return
-
             if new_val == curr_val:
                 show_alert("New password cannot be the same as your temporary password.", is_error=True)
                 return
-
             if new_val != conf_val:
                 show_alert("New password and Confirm password do not match.", is_error=True)
                 return
 
             submit_btn.disabled = True
-            self.page.update()
-
-            user_id = self.user.get("id")
-            ok, msg = AccountService.change_own_password(
-                user_id=user_id,
-                role=UserRole.STUDENT.value,
-                current_password=curr_val,
-                new_password=new_val
+            submit_btn.content = ft.Row(
+                controls=[ft.ProgressRing(width=16, height=16, stroke_width=2, color=ft.Colors.WHITE), ft.Text("Updating password…", color=ft.Colors.WHITE)],
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=8,
             )
+            self.page.update()
+            user_id = self.user.get("id")
 
-            submit_btn.disabled = False
+            def update_password():
+                try:
+                    ok, msg = AccountService.change_own_password(
+                        user_id=user_id,
+                        role=UserRole.STUDENT.value,
+                        current_password=curr_val,
+                        new_password=new_val,
+                    )
+                except Exception as exc:
+                    logger.warning("Mandatory password change failed (%s)", type(exc).__name__)
+                    ok, msg = False, "Unable to update your password. Please try again."
 
-            if not ok:
-                show_alert(msg, is_error=True)
-                return
+                submit_btn.disabled = False
+                submit_btn.content = ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.CHECK_CIRCLE, size=18, color=ft.Colors.WHITE),
+                        ft.Text("Update Password & Continue", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=8,
+                )
+                if not ok:
+                    show_alert(msg, is_error=True)
+                    return
 
-            # Password change succeeded!
-            show_alert("Password updated successfully! Loading dashboard...", is_error=False)
-            self.on_password_changed()
+                show_alert("Password updated successfully! Loading dashboard...", is_error=False)
+                try:
+                    self.on_password_changed()
+                except Exception as exc:
+                    logger.warning("Post-password-change navigation failed (%s)", type(exc).__name__)
+                    self.page.update()
 
+            self.page.run_thread(update_password)
         submit_btn.on_click = handle_submit
         logout_btn.on_click = lambda _: self.on_logout()
 

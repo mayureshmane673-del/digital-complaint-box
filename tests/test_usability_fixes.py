@@ -28,6 +28,49 @@ def test_login_button_loading_state_and_duplicate_prevention():
     assert rendered is not None
 
 
+def test_student_view_construction_does_not_fetch_reference_data_inline():
+    """Login-to-dashboard construction must not wait on category/location requests."""
+    import time
+    from ui.views.student_view import StudentView
+
+    page = MagicMock()
+    student = {
+        "id": "student-id",
+        "roll_number": "240101030",
+        "department_id": "dept-cse",
+        "full_name": "Test Student",
+    }
+    with patch("ui.views.student_view.ensure_complaint_attachment_state"), \
+         patch("ui.views.student_view.clear_stale_picker_pending"), \
+         patch("ui.views.student_view.get_complaint_file_picker"), \
+         patch("services.cache_service.CacheService.get_cached_categories_and_subcategories", return_value=None), \
+         patch("services.cache_service.CacheService.get_categories_and_subcategories", side_effect=AssertionError("network fetch on render")) as fetch:
+        started = time.perf_counter()
+        view = StudentView(page, student)
+        elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.1
+    assert view.categories == []
+    fetch.assert_not_called()
+
+
+def test_principal_dashboard_does_not_fetch_campus_breakdown_during_render():
+    """Campus-wide comparison is secondary and must not block the first screen."""
+    from ui.views.staff_view import StaffView
+    from models.user import UserRole
+
+    page = MagicMock()
+    page.width = 1440
+    staff = {"id": "staff-id", "full_name": "Test Principal", "department_id": None}
+    view = StaffView(page, staff, UserRole.PRINCIPAL.value)
+    with patch.object(view, "_trigger_progressive_staff_dashboard_load"), \
+         patch("services.analytics_service.AnalyticsService.get_department_breakdown", side_effect=AssertionError("blocking campus query")) as breakdown:
+        rendered = view._render_dashboard()
+
+    assert rendered is not None
+    breakdown.assert_not_called()
+
+
 def test_mobile_pick_files_blur_setting():
     """Verify page-level attachment services (singleton picker + on_result hooks).
 
@@ -365,4 +408,62 @@ def test_api_health_version():
     health = api_health()
     assert health["status"] == "healthy"
     assert health["version"] == "v1.1.0-mobile-attachment-feedback-flow"
+def test_student_complaint_list_fetch_runs_in_background():
+    """Opening My Complaints must not wait for its Supabase query in the UI callback."""
+    from ui.views.student_view import StudentView
 
+    page = MagicMock()
+    page.run_thread = MagicMock()
+    student = {
+        "id": "student-id",
+        "roll_number": "240101030",
+        "department_id": "dept-cse",
+        "full_name": "Test Student",
+    }
+    reference_data = ([{"id": "cat-1", "name": "Academic"}], {}, [])
+    with patch("ui.views.student_view.ensure_complaint_attachment_state"), \
+         patch("ui.views.student_view.clear_stale_picker_pending"), \
+         patch("ui.views.student_view.get_complaint_file_picker"), \
+         patch("services.cache_service.CacheService.get_cached_categories_and_subcategories", return_value=reference_data), \
+         patch.object(ComplaintService, "get_complaints_for_user") as fetch:
+        view = StudentView(page, student)
+        rendered = view._render_my_complaints()
+
+    assert rendered is not None
+    page.run_thread.assert_called_once()
+    fetch.assert_not_called()
+def test_staff_complaint_list_fetch_runs_in_background():
+    """Opening the staff complaint list must not wait for its scoped query."""
+    from ui.views.staff_view import StaffView
+
+    page = MagicMock()
+    page.width = 1440
+    page.run_thread = MagicMock()
+    staff = {"id": "staff-id", "full_name": "Test Coordinator", "department_id": "dept-cse", "department_code": "CSE"}
+    view = StaffView(page, staff, UserRole.COORDINATOR.value)
+    view.categories = [{"id": "cat-1", "name": "Academic"}]
+
+    with patch.object(ComplaintService, "get_complaints_for_user") as fetch:
+        rendered = view._render_complaints_list()
+
+    assert rendered is not None
+    page.run_thread.assert_called_once()
+    fetch.assert_not_called()
+
+
+def test_analytics_page_fetch_runs_in_background():
+    """The analytics page should show its shell before slow read-only queries run."""
+    from ui.views.analytics_view import AnalyticsView
+
+    page = MagicMock()
+    page.run_thread = MagicMock()
+    view = AnalyticsView(page, UserRole.COORDINATOR.value, "dept-cse")
+
+    with patch("services.analytics_service.AnalyticsService.get_department_breakdown") as departments, \
+         patch("services.feedback_service.FeedbackService.get_feedback_for_scope") as feedback:
+        rendered = view.render()
+
+    assert rendered is not None
+    page.run_thread.assert_called_once()
+    departments.assert_not_called()
+    feedback.assert_not_called()

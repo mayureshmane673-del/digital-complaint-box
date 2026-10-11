@@ -4,6 +4,7 @@ Supports Dark Mode, loading states, and mobile responsive layout.
 """
 
 from typing import Dict, Any, Callable, Optional
+import logging
 import flet as ft
 from ui.theme import (
     COLOR_PRIMARY, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors
@@ -17,6 +18,8 @@ from services.complaint_service import ComplaintService
 from services.storage_service import StorageService
 from services.feedback_service import FeedbackService
 from database.supabase_client import get_supabase_client
+
+logger = logging.getLogger(__name__)
 
 
 def show_complaint_detail_dialog(
@@ -242,20 +245,35 @@ def show_complaint_detail_dialog(
                 )
 
                 def do_confirm_delete(ev):
+                    if confirm_btn.disabled:
+                        return
                     confirm_btn.disabled = True
-                    confirm_btn.content = ft.Text("Deleting...")
-                    page.update()
-                    ok, msg = ComplaintService.delete_complaint_by_student(cid, current_user_id)
-                    close_dialog(page, confirm_dlg)
-                    close_dialog(page, dlg)
-                    if ok:
-                        show_feedback_message(page, msg, is_error=False)
-                        if on_updated:
-                            on_updated()
-                    else:
-                        show_feedback_message(page, msg, is_error=True)
+                    confirm_btn.content = ft.Text("Deleting…")
                     page.update()
 
+                    def delete_complaint():
+                        try:
+                            ok, msg = ComplaintService.delete_complaint_by_student(cid, current_user_id)
+                            if ok:
+                                close_dialog(page, confirm_dlg)
+                                close_dialog(page, dlg)
+                                show_feedback_message(page, msg, is_error=False)
+                                if on_updated:
+                                    on_updated()
+                            else:
+                                show_feedback_message(page, msg, is_error=True)
+                        except Exception as exc:
+                            logger.warning("Complaint detail deletion failed (%s)", type(exc).__name__)
+                            show_feedback_message(page, "Unable to delete this complaint. Please try again.", is_error=True)
+                        finally:
+                            confirm_btn.disabled = False
+                            confirm_btn.content = ft.Text("Yes, Delete")
+                            try:
+                                page.update()
+                            except Exception:
+                                pass
+
+                    page.run_thread(delete_complaint)
                 confirm_btn.on_click = do_confirm_delete
 
                 confirm_dlg = ft.AlertDialog(
@@ -330,34 +348,44 @@ def show_complaint_detail_dialog(
         )
 
         def apply_status(e):
+            if save_status_btn.disabled:
+                return
             new_st = status_dropdown.value
-            rem = status_remark.value
+            rem = status_remark.value or ""
 
             save_status_btn.disabled = True
-            save_status_btn.content = ft.Text("Saving...")
+            save_status_btn.content = ft.Text("Saving…")
             page.update()
 
-            ok, msg = ComplaintService.update_status(
-                actor_role=current_role,
-                actor_id=current_user_id,
-                actor_dept_id=current_dept_id,
-                complaint_id=cid,
-                new_status=new_st,
-                remark=rem
-            )
+            def update_status():
+                try:
+                    ok, msg = ComplaintService.update_status(
+                        actor_role=current_role,
+                        actor_id=current_user_id,
+                        actor_dept_id=current_dept_id,
+                        complaint_id=cid,
+                        new_status=new_st,
+                        remark=rem
+                    )
+                    if ok:
+                        show_feedback_message(page, msg, is_error=False)
+                        dlg.open = False
+                        if on_updated:
+                            on_updated()
+                    else:
+                        show_feedback_message(page, msg, is_error=True)
+                except Exception as exc:
+                    logger.warning("Complaint status update failed (%s)", type(exc).__name__)
+                    show_feedback_message(page, "Unable to update complaint status. Please try again.", is_error=True)
+                finally:
+                    save_status_btn.disabled = False
+                    save_status_btn.content = ft.Text("Save Status")
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
 
-            save_status_btn.disabled = False
-            save_status_btn.content = ft.Text("Save Status")
-
-            if ok:
-                show_feedback_message(page, msg, is_error=False)
-                dlg.open = False
-                page.update()
-                on_updated()
-            else:
-                show_feedback_message(page, msg, is_error=True)
-                page.update()
-
+            page.run_thread(update_status)
         save_status_btn.on_click = apply_status
 
         management_controls.append(

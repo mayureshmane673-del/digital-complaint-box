@@ -52,13 +52,13 @@ class AnalyticsService:
             try:
                 res = f_comp.result()
                 complaints = res.data or []
-            except Exception:
-                complaints = []
+            except Exception as exc:
+                raise RuntimeError("Dashboard complaint metrics are unavailable") from exc
             try:
                 fb_res = f_fb.result()
                 fb_items = fb_res.data or []
-            except Exception:
-                fb_items = []
+            except Exception as exc:
+                raise RuntimeError("Dashboard feedback metrics are unavailable") from exc
 
         metrics = {
             "total": 0,
