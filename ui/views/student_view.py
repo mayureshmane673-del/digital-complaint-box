@@ -20,8 +20,7 @@ from services.analytics_service import AnalyticsService
 from database.supabase_client import get_supabase_client, get_trusted_backend_client
 from ui.theme import (
     COLOR_PRIMARY, COLOR_SURFACE, COLOR_BORDER, COLOR_TEXT_PRIMARY,
-    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow,
-    is_compact_width,
+    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow
 )
 from ui.state import AppState
 from ui.components.college_hero import create_dashboard_welcome_banner
@@ -199,7 +198,7 @@ class StudentView:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        is_compact = is_compact_width(getattr(self.page, "width", None))
+        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
         dept_display = AppState.department_name or AppState.department_code or ""
         welcome_banner = create_dashboard_welcome_banner(
             user_name=self.student.get('full_name', 'Student'),

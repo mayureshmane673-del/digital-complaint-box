@@ -16,11 +16,10 @@ from services.cache_service import CacheService
 from database.supabase_client import get_supabase_client
 from ui.theme import (
     COLOR_PRIMARY, COLOR_SURFACE, COLOR_BORDER, COLOR_TEXT_PRIMARY,
-    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow,
-    is_compact_width,
+    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow
 )
 from ui.state import AppState
-from ui.components.college_hero import create_dashboard_welcome_banner, create_complaint_lifecycle_panel
+from ui.components.college_hero import create_dashboard_welcome_banner
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
 from ui.components.stat_card import create_stat_card
 from ui.components.complaint_card import create_complaint_card
@@ -234,7 +233,7 @@ class StaffView:
             except Exception:
                 campus_overview_card = None
 
-        is_compact = is_compact_width(getattr(self.page, "width", None))
+        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
         welcome_banner = create_dashboard_welcome_banner(
             user_name=self.staff.get('full_name', 'Faculty Member'),
             role_text=f"{self.role} ({self.department_code or 'Campus-wide'})",
@@ -263,7 +262,6 @@ class StaffView:
         if campus_overview_card:
             dash_controls.append(campus_overview_card)
         dash_controls.extend([
-            create_complaint_lifecycle_panel(is_dark=is_dark, compact=is_compact),
             chart_card,
             distribution_row,
             ft.Divider(color=colors["border"]),
@@ -853,7 +851,7 @@ class StaffView:
 
         is_mobile_initial = bool(
             getattr(self.page, "navigation_bar", None) is not None
-            or is_compact_width(getattr(self.page, "width", None))
+            or (getattr(self.page, "width", None) is not None and self.page.width < 768)
         )
 
         scrollable_table = ft.Row(
@@ -919,7 +917,7 @@ class StaffView:
 
             is_mobile = bool(
                 getattr(self.page, "navigation_bar", None) is not None
-                or is_compact_width(getattr(self.page, "width", None))
+                or (getattr(self.page, "width", None) is not None and self.page.width < 768)
             )
 
             if not is_mobile:

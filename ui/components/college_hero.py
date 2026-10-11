@@ -12,157 +12,163 @@ COLLEGE_STATUE_IMG = "/images/college_statue.jpg"
 
 
 def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compact: bool = False) -> ft.Control:
-    """Build a lightweight, illustrative complaint lifecycle panel for authentication."""
+    """
+    Builds the authentic campus visual panel for the login screen.
+    Uses real college photos (Building / Statue) with soft royal blue / violet gradient overlays
+    and institutional messaging: "A Cleaner, Safer and Better Campus Together".
+    """
     colors = get_theme_colors(is_dark)
-    role_label = "STAFF PORTAL" if is_staff else "CAMPUS PORTAL"
-    steps = [
-        (ft.Icons.DESCRIPTION_OUTLINED, "Submitted"),
-        (ft.Icons.ACCOUNT_TREE_OUTLINED, "Routed to Department"),
-        (ft.Icons.ACCESS_TIME, "Under review"),
-        (ft.Icons.TASK_ALT, "Resolved"),
-    ]
-    step_items = []
-    for index, (icon, label) in enumerate(steps):
-        step_items.append(
-            ft.Column(
+    img_src = COLLEGE_STATUE_IMG if is_staff else COLLEGE_BUILDING_IMG
+    role_label = "COORDINATOR & STAFF PORTAL" if is_staff else "STUDENT GRIEVANCE PORTAL"
+
+    if compact:
+        # Mobile compact hero card
+        return ft.Container(
+            content=ft.Stack(
                 controls=[
-                    ft.Container(
-                        content=ft.Icon(icon, size=19, color=colors["primary"]),
-                        width=32 if compact else 44,
-                        height=32 if compact else 44,
-                        alignment=ft.Alignment.CENTER,
-                        bgcolor="#eff6ff",
-                        border=ft.Border.all(1, "#bfdbfe"),
+                    ft.Image(
+                        src=img_src,
+                        fit=ft.ImageFit.COVER,
+                        width=1000,
+                        height=160,
                         border_radius=14,
                     ),
-                    ft.Text(
-                        ("Routed to\nDepartment" if compact and label == "Routed to Department" else label),
-                        size=8 if compact else 10,
-                        color=colors["text_muted"], text_align=ft.TextAlign.CENTER,
-                        max_lines=2,
-                    ),
-                ],
-                spacing=6,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                expand=True,
-            )
+                    ft.Container(
+                        bgcolor=ft.Colors.with_opacity(0.68, "#0f172a" if is_dark else "#1e3a8a"),
+                        border_radius=14,
+                        padding=ft.padding.symmetric(horizontal=16, vertical=12),
+                        content=ft.Column(
+                            controls=[
+                                ft.Row(
+                                    controls=[
+                                        ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=ft.Colors.WHITE, size=18),
+                                        ft.Text("Digital Complaint Box", size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                    ],
+                                    spacing=6
+                                ),
+                                ft.Text(
+                                    "A Cleaner, Safer and Better Campus Together",
+                                    size=12,
+                                    italic=True,
+                                    color="#93c5fd",
+                                    weight=ft.FontWeight.W_500
+                                ),
+                                ft.Container(
+                                    content=ft.Text(role_label, size=9, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                    bgcolor=ft.Colors.with_opacity(0.35, ft.Colors.WHITE),
+                                    border_radius=6,
+                                    padding=ft.padding.symmetric(horizontal=6, vertical=2)
+                                )
+                            ],
+                            spacing=4,
+                            alignment=ft.MainAxisAlignment.CENTER
+                        )
+                    )
+                ]
+            ),
+            border_radius=14,
+            height=160,
+            margin=ft.margin.only(bottom=8)
         )
-        if index < len(steps) - 1:
-            step_items.append(
-                ft.Container(
-                    height=2,
-                    bgcolor="#bfdbfe",
-                    width=10 if compact else None,
-                    expand=not compact,
-                    margin=ft.margin.only(bottom=18 if compact else 22),
-                )
-            )
 
-    lifecycle_controls = [ft.Row(controls=step_items, spacing=3, vertical_alignment=ft.CrossAxisAlignment.START)]
-    if not compact:
-        lifecycle_controls.append(ft.Text(
-            "Illustrative flow · Complaint-specific progress appears in its details",
-            size=11, color=colors["text_muted"],
-        ))
-    lifecycle = ft.Container(
-        content=ft.Column(controls=lifecycle_controls, spacing=6 if compact else 10),
-        bgcolor=colors["surface"],
-        border=ft.Border.all(1, colors["border"]),
-        border_radius=14,
-        padding=8 if compact else 16,
-    )
-
+    # Desktop / Tablet hero panel (Image 3 Left Panel)
     return ft.Container(
-        content=ft.Column(
+        content=ft.Stack(
             controls=[
-                *([] if compact else [ft.Container(
-                    content=ft.Row(
-                        controls=[
-                            ft.Icon(ft.Icons.ACCOUNT_BALANCE_OUTLINED, size=17, color=colors["primary"]),
-                            ft.Text(role_label, size=10, weight=ft.FontWeight.BOLD, color=colors["primary"]),
-                        ],
-                        spacing=7,
-                    ),
-                    bgcolor="#eff6ff",
+                # Background real college photo
+                ft.Image(
+                    src=img_src,
+                    fit=ft.ImageFit.COVER,
+                    expand=True,
                     border_radius=20,
-                    padding=ft.padding.symmetric(horizontal=11, vertical=6),
-                )]),
-                ft.Text("Make your voice heard." if compact else "A better campus starts with being heard.", size=20 if compact else 30, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                ft.Text(
-                    "Report an issue and track its progress." if compact else "Share concerns securely and follow a clear path to resolution.",
-                    size=12 if compact else 13,
-                    color=colors["text_muted"],
                 ),
-                lifecycle,
-                *([] if compact else [ft.Row(
-                    controls=[
-                        ft.Icon(ft.Icons.SHIELD_OUTLINED, size=15, color=colors["primary"]),
-                        ft.Text("Private, role-based access", size=11, color=colors["text_muted"]),
-                    ],
-                    spacing=6,
-                )]),
-            ],
-            spacing=8 if compact else 20,
-            horizontal_alignment=ft.CrossAxisAlignment.START,
-        ),
-        bgcolor=colors["bg"],
-        border_radius=20,
-        padding=10 if compact else 28,
-        expand=not compact,
-        shadow=get_card_shadow(is_dark),
-    )
-
-
-def create_complaint_lifecycle_panel(is_dark: bool = False, compact: bool = False) -> ft.Control:
-    """Show the standard complaint workflow as an illustrative dashboard panel."""
-    colors = get_theme_colors(is_dark)
-    steps = [
-        (ft.Icons.DESCRIPTION_OUTLINED, "Complaint Received"),
-        (ft.Icons.ACCOUNT_BALANCE_OUTLINED, "Assigned to Department"),
-        (ft.Icons.PENDING_ACTIONS, "Under Review"),
-        (ft.Icons.TASK_ALT, "Resolved"),
-    ]
-    flow = []
-    compact_steps = []
-    for index, (icon, label) in enumerate(steps):
-        compact_steps.append(ft.Container(
-            content=ft.Row(controls=[
-                ft.Icon(icon, size=17, color=colors["primary"]),
-                ft.Text(label, size=10, color=colors["text"], max_lines=2,
-                        overflow=ft.TextOverflow.ELLIPSIS, expand=True),
-            ], spacing=6),
-            bgcolor=colors["surface_variant"], border_radius=9, padding=8,
-            col={"xs": 6, "sm": 3},
-        ))
-        flow.append(ft.Column(
-            controls=[
+                # Soft gradient overlay with subtle opacity to keep campus recognizable
                 ft.Container(
-                    content=ft.Icon(icon, size=20, color=colors["primary"]),
-                    width=42, height=42, alignment=ft.Alignment.CENTER,
-                    bgcolor=colors["surface_variant"], border_radius=12,
-                ),
-                ft.Text(label, size=10, color=colors["text_muted"],
-                        text_align=ft.TextAlign.CENTER, max_lines=2),
-            ], spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True,
-        ))
-        if index < len(steps) - 1:
-            flow.append(ft.Container(
-                height=2, bgcolor=colors["border"], expand=True,
-                margin=ft.margin.only(bottom=22),
-            ))
-    return ft.Container(
-        content=ft.Column(controls=[
-            ft.Row(controls=[
-                ft.Icon(ft.Icons.ACCOUNT_TREE_OUTLINED, size=19, color=colors["primary"]),
-                ft.Text("Complaint Resolution Process", size=15,
-                        weight=ft.FontWeight.BOLD, color=colors["text"]),
-            ], spacing=8),
-            ft.Text("A clear path from submission to resolution", size=12, color=colors["text_muted"]),
-            ft.ResponsiveRow(controls=compact_steps, spacing=8, run_spacing=8) if compact else
-            ft.Row(controls=flow, spacing=4, vertical_alignment=ft.CrossAxisAlignment.START),
-        ], spacing=10),
-        bgcolor=colors["surface"], border=ft.Border.all(1, colors["border"]),
-        border_radius=12, padding=16,
+                    bgcolor=ft.Colors.with_opacity(0.72 if is_dark else 0.65, "#0b1329" if is_dark else "#1e3a8a"),
+                    border_radius=20,
+                    padding=28,
+                    content=ft.Column(
+                        controls=[
+                            # Institution Pill
+                            ft.Container(
+                                content=ft.Row(
+                                    controls=[
+                                        ft.Icon(ft.Icons.ACCOUNT_BALANCE, color="#93c5fd", size=15),
+                                        ft.Text("INSTITUTIONAL GRIEVANCE REDRESSAL", size=10, weight=ft.FontWeight.BOLD, color="#dbeafe"),
+                                    ],
+                                    spacing=6,
+                                ),
+                                bgcolor=ft.Colors.with_opacity(0.25, "#172554"),
+                                border=ft.Border.all(1, ft.Colors.with_opacity(0.3, "#93c5fd")),
+                                border_radius=20,
+                                padding=ft.padding.symmetric(horizontal=12, vertical=5),
+                            ),
+                            ft.Container(height=10),
+                            ft.Text(
+                                "Digital Complaint Box",
+                                size=28,
+                                weight=ft.FontWeight.BOLD,
+                                color=ft.Colors.WHITE
+                            ),
+                            ft.Text(
+                                "A Cleaner, Safer and Better Campus Together",
+                                size=18,
+                                italic=True,
+                                color="#bfdbfe",
+                                weight=ft.FontWeight.W_500
+                            ),
+                            ft.Container(height=8),
+                            ft.Text(
+                                "Empowering students and faculty through transparent, confidential, and role-isolated grievance resolution.",
+                                size=13,
+                                color="#e2e8f0",
+                                height=1.4
+                            ),
+                            ft.Container(expand=True),
+                            # Highlights
+                            ft.Column(
+                                controls=[
+                                    ft.Row(
+                                        controls=[
+                                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color="#4ade80"),
+                                            ft.Text("5 Core Academic Departments", size=12, color=ft.Colors.WHITE, weight=ft.FontWeight.W_500)
+                                        ],
+                                        spacing=8
+                                    ),
+                                    ft.Row(
+                                        controls=[
+                                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color="#4ade80"),
+                                            ft.Text("Role Isolation & Anonymous Grievances", size=12, color=ft.Colors.WHITE, weight=ft.FontWeight.W_500)
+                                        ],
+                                        spacing=8
+                                    ),
+                                    ft.Row(
+                                        controls=[
+                                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color="#4ade80"),
+                                            ft.Text("Zero-Leakage Institutional Security", size=12, color=ft.Colors.WHITE, weight=ft.FontWeight.W_500)
+                                        ],
+                                        spacing=8
+                                    ),
+                                ],
+                                spacing=8
+                            ),
+                            ft.Container(height=6),
+                            # Campus watermark text
+                            ft.Text(
+                                "Official Campus Portal • Real-Time Tracking",
+                                size=11,
+                                color="#94a3b8"
+                            )
+                        ],
+                        spacing=6,
+                        horizontal_alignment=ft.CrossAxisAlignment.START
+                    )
+                )
+            ]
+        ),
+        border_radius=20,
+        expand=True,
+        shadow=get_card_shadow(is_dark)
     )
 
 
@@ -225,11 +231,7 @@ def create_dashboard_welcome_banner(
                             ),
                             ft.Column(
                                 controls=[
-                                    ft.Text(
-                                        f"Welcome back, {user_name}!", size=14,
-                                        weight=ft.FontWeight.BOLD, color=colors["text"],
-                                        max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
-                                    ),
+                                    ft.Text(f"Welcome back, {user_name}!", size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
                                     ft.Text(subtitle_str, size=11, color=colors["text_muted"], max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                                 ],
                                 spacing=2,

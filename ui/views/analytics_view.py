@@ -5,7 +5,7 @@ ui/views/analytics_view.py: Department comparisons, resolution duration metrics,
 from typing import Optional
 import flet as ft
 from services.analytics_service import AnalyticsService
-from ui.theme import get_theme_colors, get_card_shadow, is_compact_width
+from ui.theme import get_theme_colors, get_card_shadow
 from ui.state import AppState
 from models.user import UserRole
 
@@ -100,7 +100,7 @@ class AnalyticsView:
             rows=rows
         )
 
-        is_mobile = is_compact_width(getattr(self.page, "width", None))
+        is_mobile = (getattr(self.page, "width", None) or 1200) < 768
 
         scrollable_table = ft.Container(
             content=ft.Row(

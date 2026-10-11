@@ -6,7 +6,7 @@ from typing import Callable, Optional
 import flet as ft
 from ui.theme import (
     COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_SURFACE, COLOR_BORDER,
-    COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, get_theme_colors, is_compact_width
+    COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, get_theme_colors
 )
 from ui.state import AppState
 from models.user import UserRole
@@ -67,7 +67,7 @@ def create_app_bar(
     if department_code and user_role in (UserRole.HOD.value, UserRole.COORDINATOR.value):
         role_badge_text = f"{user_role} ({department_code})"
 
-    is_compact = is_compact_width(getattr(page, "width", None))
+    is_compact = bool(isinstance(getattr(page, "width", None), (int, float)) and page.width < 768)
 
     return ft.AppBar(
         leading=ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=ft.Colors.WHITE, size=22),

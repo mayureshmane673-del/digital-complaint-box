@@ -7,10 +7,10 @@ import flet as ft
 import ui.flet_compat
 
 # Color Palette (Light Theme Defaults)
-COLOR_PRIMARY = "#2563eb"       # Primary blue
+COLOR_PRIMARY = "#1e40af"       # Royal Blue (Image 3)
 COLOR_PRIMARY_HOVER = "#1d4ed8" # Blue 700
-COLOR_PRIMARY_LIGHT = "#60a5fa" # Accent blue
-COLOR_ACCENT = "#3b82f6"        # Blue accent
+COLOR_PRIMARY_LIGHT = "#3b82f6" # Accent Blue 500
+COLOR_ACCENT = "#6366f1"        # Soft Indigo
 COLOR_SECONDARY = "#0f766e"     # Teal
 COLOR_BG = "#f8fafc"            # Slate light background
 COLOR_SURFACE = "#ffffff"       # Card / Container background
@@ -27,11 +27,6 @@ COLOR_TEXT_PRIMARY_DARK = "#f8fafc"  # Slate 50
 COLOR_TEXT_MUTED_DARK = "#94a3b8"    # Slate 400
 COLOR_BORDER_DARK = "#334155"        # Slate 700
 COLOR_PRIMARY_DARK = "#3b82f6"       # Lighter Blue for Dark Mode Contrast
-
-
-def is_compact_width(width: Any, breakpoint: int = 1024) -> bool:
-    """Treat an unknown first-layout width as compact until Flet reports dimensions."""
-    return not isinstance(width, (int, float)) or width < breakpoint
 
 # Status Colors
 STATUS_COLORS = {
