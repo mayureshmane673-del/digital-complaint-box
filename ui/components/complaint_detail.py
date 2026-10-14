@@ -7,7 +7,9 @@ from typing import Dict, Any, Callable, Optional
 import logging
 import flet as ft
 from ui.theme import (
-    COLOR_PRIMARY, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors
+    get_theme_colors, StatusBadge, PriorityBadge,
+    get_responsive_layout, get_button_style, get_input_style,
+    get_text_style, RADII, SPACING, DIALOG_MAX_WIDTH, DIALOG_MAX_HEIGHT,
 )
 from ui.state import AppState
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
@@ -32,6 +34,7 @@ def show_complaint_detail_dialog(
 ):
     is_dark = AppState.is_dark_mode
     colors = get_theme_colors(is_dark)
+    is_mobile = get_responsive_layout(getattr(page, "width", None)) == "mobile"
 
     cid = complaint.get("complaint_id")
     status = complaint.get("status", "Pending")
@@ -51,29 +54,51 @@ def show_complaint_detail_dialog(
 
     # History timeline widgets
     history_widgets = []
-    for h in history_items:
+    for history_index, h in enumerate(history_items):
         act = h.get("action", "")
         role = h.get("actor_role", "System")
         rem = h.get("remarks", "")
         t_str = format_datetime(h.get("created_at"))
         history_widgets.append(
-            ft.Container(
-                content=ft.Column(
-                    controls=[
-                        ft.Row(
-                            controls=[
-                                ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=16, color=colors["primary"]),
-                                ft.Text(f"{act.replace('_', ' ').title()} by {role}", weight=ft.FontWeight.W_600, size=13, color=colors["text"]),
-                                ft.Text(t_str, size=11, color=colors["text_muted"])
-                            ],
-                            spacing=6,
-                            wrap=True
-                        ),
-                        ft.Text(rem, size=12, color=colors["text"]) if rem else ft.Container()
-                    ],
-                    spacing=2
-                ),
-                padding=ft.padding.only(left=8, bottom=8)
+            ft.Row(
+                controls=[
+                    ft.Column(
+                        controls=[
+                            ft.Container(
+                                width=SPACING["sm"],
+                                height=SPACING["sm"],
+                                border_radius=RADII["pill"],
+                                bgcolor=colors["primary"],
+                                margin=ft.margin.only(top=SPACING["xs"]),
+                            ),
+                            ft.Container(
+                                width=2,
+                                height=SPACING["xl"],
+                                bgcolor=colors["border"],
+                                visible=history_index < len(history_items) - 1,
+                            ),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=0,
+                    ),
+                    ft.Column(
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    ft.Text(f"{act.replace('_', ' ').title()} by {role}", weight=ft.FontWeight.W_600, size=13, color=colors["text"], expand=True),
+                                    ft.Text(t_str, size=11, color=colors["text_muted"]),
+                                ],
+                                spacing=SPACING["sm"],
+                                wrap=True,
+                            ),
+                            ft.Text(rem, size=12, color=colors["text"]) if rem else ft.Container(),
+                        ],
+                        spacing=2,
+                        expand=True,
+                    ),
+                ],
+                spacing=SPACING["sm"],
+                vertical_alignment=ft.CrossAxisAlignment.START,
             )
         )
 
@@ -128,14 +153,14 @@ def show_complaint_detail_dialog(
         if is_img and signed_file_url:
             preview_content = ft.Image(
                 src=signed_file_url,
-                width=72,
-                height=56,
+                width=SPACING["3xl"] if is_mobile else SPACING["3xl"] + SPACING["lg"],
+                height=SPACING["2xl"] if is_mobile else SPACING["2xl"] + SPACING["sm"],
                 fit=ft.BoxFit.COVER if hasattr(ft, "BoxFit") else "cover",
-                border_radius=6,
+                border_radius=RADII["sm"],
                 error_content=ft.Container(
                     content=ft.Icon(icon_type, size=28, color=colors["primary"]),
                     alignment=ft.Alignment.CENTER,
-                    bgcolor=colors.get("surface_variant", "#f1f5f9"),
+                    bgcolor=colors["surface_variant"],
                     border_radius=6
                 )
             )
@@ -143,19 +168,19 @@ def show_complaint_detail_dialog(
         if not preview_content:
             preview_content = ft.Container(
                 content=ft.Icon(icon_type, size=28, color=colors["primary"]),
-                width=72,
-                height=56,
+                width=SPACING["3xl"] if is_mobile else SPACING["3xl"] + SPACING["lg"],
+                height=SPACING["2xl"] if is_mobile else SPACING["2xl"] + SPACING["sm"],
                 alignment=ft.Alignment.CENTER,
-                bgcolor=colors.get("surface_variant", "#f1f5f9"),
-                border_radius=6
+                bgcolor=colors["surface_variant"],
+                border_radius=RADII["sm"]
             )
         else:
             preview_content = ft.Container(
                 content=preview_content,
-                width=72,
-                height=56,
+                width=SPACING["3xl"] if is_mobile else SPACING["3xl"] + SPACING["lg"],
+                height=SPACING["2xl"] if is_mobile else SPACING["2xl"] + SPACING["sm"],
                 alignment=ft.Alignment.CENTER,
-                border_radius=6,
+                border_radius=RADII["sm"],
                 clip_behavior=ft.ClipBehavior.HARD_EDGE
             )
 
@@ -168,11 +193,7 @@ def show_complaint_detail_dialog(
             ], spacing=4),
             url=btn_url,
             on_click=open_url if not signed_file_url else None,
-            style=ft.ButtonStyle(
-                bgcolor=colors["primary"],
-                color=ft.Colors.WHITE,
-                padding=ft.padding.symmetric(horizontal=12, vertical=6)
-            )
+            style=get_button_style(is_dark, size="sm")
         )
 
         attachment_card = ft.Container(
@@ -209,12 +230,13 @@ def show_complaint_detail_dialog(
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=12
+                spacing=SPACING["sm"],
+                wrap=True,
             ),
             border=ft.Border.all(1, colors["border"]),
-            border_radius=8,
-            padding=8,
-            margin=ft.margin.only(bottom=6),
+            border_radius=RADII["sm"],
+            padding=SPACING["sm"],
+            margin=ft.margin.only(bottom=SPACING["xs"]),
             bgcolor=colors["surface"]
         )
         attachment_widgets.append(attachment_card)
@@ -235,13 +257,13 @@ def show_complaint_detail_dialog(
                     ft.Icon(ft.Icons.DELETE_FOREVER, size=16, color=ft.Colors.WHITE),
                     ft.Text("Delete Complaint", size=13, color=ft.Colors.WHITE)
                 ], spacing=6),
-                style=ft.ButtonStyle(bgcolor="#dc2626", color=ft.Colors.WHITE)
+                style=get_button_style(is_dark, variant="danger")
             )
 
             def open_delete_confirm(e):
                 confirm_btn = ft.ElevatedButton(
                     content=ft.Text("Yes, Delete"),
-                    style=ft.ButtonStyle(bgcolor="#dc2626", color=ft.Colors.WHITE)
+                    style=get_button_style(is_dark, variant="danger")
                 )
 
                 def do_confirm_delete(ev):
@@ -294,7 +316,7 @@ def show_complaint_detail_dialog(
                         ft.Text("Need to withdraw this grievance?", size=13, color=colors["text_muted"]),
                         delete_btn
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
-                    bgcolor=colors.get("surface_variant", "#f1f5f9"),
+                    bgcolor=colors["surface_variant"],
                     padding=ft.padding.symmetric(horizontal=12, vertical=8),
                     border_radius=8
                 )
@@ -311,7 +333,7 @@ def show_complaint_detail_dialog(
                             expand=True
                         )
                     ], spacing=6),
-                    bgcolor=colors.get("surface_variant", "#f1f5f9"),
+                    bgcolor=colors["surface_variant"],
                     padding=ft.padding.symmetric(horizontal=12, vertical=8),
                     border_radius=8
                 )
@@ -329,7 +351,10 @@ def show_complaint_detail_dialog(
                 ft.dropdown.Option(key="Rejected", text="Rejected")
             ],
             dense=True,
-            width=180
+                    width=180,
+                    border_color=colors["border"],
+                    focused_border_color=colors["primary"],
+                    text_size=13,
         )
         status_remark = ft.TextField(
             label="Remark / Resolution Reason",
@@ -338,13 +363,14 @@ def show_complaint_detail_dialog(
             dense=True,
             min_lines=1,
             max_lines=3,
-            expand=True
+            expand=True,
+            **get_input_style(is_dark),
         )
 
         save_status_btn = ft.ElevatedButton(
             content=ft.Text("Save Status"),
             icon=ft.Icons.CHECK,
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
 
         def apply_status(e):
@@ -419,8 +445,8 @@ def show_complaint_detail_dialog(
                 ],
                 spacing=4
             ),
-            bgcolor=colors.get("surface_variant", "#f1f5f9"),
-            border_radius=8,
+            bgcolor=colors["surface_variant"],
+            border_radius=RADII["sm"],
             padding=ft.padding.symmetric(horizontal=8, vertical=4)
         ),
     ]
@@ -435,8 +461,8 @@ def show_complaint_detail_dialog(
                     ],
                     spacing=4
                 ),
-                bgcolor=colors.get("surface_variant", "#f1f5f9"),
-                border_radius=8,
+                bgcolor=colors["surface_variant"],
+                border_radius=RADII["sm"],
                 padding=ft.padding.symmetric(horizontal=8, vertical=4)
             )
         )
@@ -450,7 +476,8 @@ def show_complaint_detail_dialog(
                 ],
                 spacing=4
             ),
-            bgcolor=colors.get("surface_variant", "#f1f5f9"),
+            bgcolor=colors["surface_variant"],
+            border_radius=RADII["sm"],
             padding=ft.padding.symmetric(horizontal=8, vertical=4)
         ),
         ft.Container(
@@ -461,15 +488,20 @@ def show_complaint_detail_dialog(
                 ],
                 spacing=4
             ),
-            bgcolor=colors.get("surface_variant", "#f1f5f9"),
-            border_radius=8,
+            bgcolor=colors["surface_variant"],
+            border_radius=RADII["sm"],
             padding=ft.padding.symmetric(horizontal=8, vertical=4)
         ),
         ft.Container(
-            content=ft.Text(f"Priority: {priority}", size=11, weight=ft.FontWeight.BOLD, color=PRIORITY_COLORS.get(priority, "#6b7280")),
-            bgcolor=ft.Colors.with_opacity(0.12, PRIORITY_COLORS.get(priority, "#6b7280")),
-            border_radius=8,
-            padding=ft.padding.symmetric(horizontal=8, vertical=4)
+            content=ft.Row(
+                controls=[
+                    ft.Text("Priority:", size=11, color=colors["text_muted"]),
+                    PriorityBadge(priority, is_dark),
+                ],
+                spacing=SPACING["xs"],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.padding.symmetric(horizontal=SPACING["sm"], vertical=SPACING["xs"])
         )
     ])
 
@@ -478,13 +510,13 @@ def show_complaint_detail_dialog(
             ft.Container(
                 content=ft.Row(
                     controls=[
-                        ft.Icon(ft.Icons.VISIBILITY_OFF, size=12, color="#94a3b8" if is_dark else "#64748b"),
-                        ft.Text("Identity Masked (Anonymous)", size=11, weight=ft.FontWeight.W_600, color="#94a3b8" if is_dark else "#64748b")
+                        ft.Icon(ft.Icons.VISIBILITY_OFF, size=12, color=colors["text_muted"]),
+                        ft.Text("Identity Masked (Anonymous)", size=11, weight=ft.FontWeight.W_600, color=colors["text_muted"])
                     ],
                     spacing=4
                 ),
-                bgcolor="#1e293b" if is_dark else "#f1f5f9",
-                border_radius=8,
+                bgcolor=colors["surface_variant"],
+                border_radius=RADII["sm"],
                 padding=ft.padding.symmetric(horizontal=8, vertical=4)
             )
         )
@@ -502,16 +534,16 @@ def show_complaint_detail_dialog(
                     content=ft.Column(
                         controls=[
                             ft.Row([
-                                ft.Text(f"{stars} ({r}/5)", color="#f59e0b", weight=ft.FontWeight.BOLD, size=13),
+                                ft.Text(f"{stars} ({r}/5)", color=colors["accent"], weight=ft.FontWeight.BOLD, size=13),
                                 ft.Text(f"Submitted: {t_str}", size=11, color=colors["text_muted"])
                             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
                             ft.Text(c, size=12, color=colors["text"])
                         ],
                         spacing=2
                     ),
-                    bgcolor=colors.get("surface_variant", "#f8fafc"),
+                    bgcolor=colors["surface_variant"],
                     padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                    border_radius=8,
+                    border_radius=RADII["sm"],
                     margin=ft.margin.only(bottom=4)
                 )
             )
@@ -520,18 +552,23 @@ def show_complaint_detail_dialog(
                 ft.Text("No student feedback submitted yet for this resolved complaint.", size=12, italic=True, color=colors["text_muted"])
             )
 
+    management_action_bar = (
+        ft.Container(
+            content=ft.Column(controls=management_controls, spacing=SPACING["sm"]),
+            padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["sm"]),
+            bgcolor=colors["surface"],
+            border=ft.Border.only(top=ft.BorderSide(1, colors["border"])),
+        )
+        if management_controls else None
+    )
+
     # Main modal content
     content_col = ft.Column(
         controls=[
             ft.Row(
                 controls=[
                     ft.Text(f"Complaint #{cid}", size=20, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                    ft.Container(
-                        content=ft.Text(status, size=12, weight=ft.FontWeight.BOLD, color=STATUS_COLORS.get(status, "#6b7280")),
-                        bgcolor=ft.Colors.with_opacity(0.12, STATUS_COLORS.get(status, "#6b7280")),
-                        border_radius=12,
-                        padding=ft.padding.symmetric(horizontal=10, vertical=4)
-                    )
+                    StatusBadge(status, is_dark)
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 wrap=True
@@ -549,25 +586,83 @@ def show_complaint_detail_dialog(
             ft.Divider(color=colors["border"]) if status == "Resolved" else ft.Container(),
             ft.Text(f"Student Feedback ({len(feedback_items)})", weight=ft.FontWeight.BOLD, size=13, color=colors["text"]) if status == "Resolved" else ft.Container(),
             ft.Column(controls=feedback_widgets, spacing=4) if status == "Resolved" else ft.Container(),
-            ft.Divider(color=colors["border"]) if management_controls else ft.Container(),
-            ft.Column(controls=management_controls, spacing=8)
         ],
         spacing=10,
         scroll=ft.ScrollMode.AUTO
     )
 
-    dlg_height = min(620, int(page.height * 0.85)) if getattr(page, "height", None) else 580
-    dlg = ft.AlertDialog(
-        content=ft.Container(
-            content=content_col,
-            width=640,
-            height=dlg_height,
-            padding=ft.padding.symmetric(horizontal=12, vertical=8)
-        ),
-        bgcolor=colors["surface"],
-        actions=[
-            ft.TextButton("Close", on_click=lambda _: close_dialog(page, dlg))
-        ]
+    close_button = ft.TextButton(
+        "Close",
+        style=get_button_style(is_dark, variant="text"),
+        on_click=lambda _: close_dialog(page, dlg),
     )
+    dlg_height = min(
+        DIALOG_MAX_HEIGHT,
+        int(getattr(page, "height", None) * 0.9) if getattr(page, "height", None) else 640,
+    )
+    if is_mobile:
+        # Keep the scrollable record and role actions together; the close footer
+        # remains fixed outside the scroll area on the full-screen mobile sheet.
+        dlg = ft.BottomSheet(
+            content=ft.Column(
+                controls=[
+                    ft.Container(
+                        content=ft.Row(
+                            controls=[
+                                ft.Text(f"Complaint #{cid}", style=get_text_style("title", is_dark), expand=True),
+                                ft.IconButton(
+                                    icon=ft.Icons.CLOSE,
+                                    tooltip="Close complaint details",
+                                    icon_color=colors["text_muted"],
+                                    on_click=lambda _: close_dialog(page, dlg),
+                                ),
+                            ],
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"]),
+                    ),
+                    ft.Container(content=content_col, expand=True, padding=SPACING["md"]),
+                    management_action_bar if management_action_bar is not None else ft.Container(),
+                    ft.Container(
+                        content=ft.Row([close_button], alignment=ft.MainAxisAlignment.END),
+                        padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"]),
+                        border=ft.Border.only(top=ft.BorderSide(1, colors["border"])),
+                        bgcolor=colors["surface"],
+                    ),
+                ],
+                spacing=0,
+                expand=True,
+            ),
+            bgcolor=colors["surface"],
+            fullscreen=True,
+            show_drag_handle=True,
+            use_safe_area=True,
+            scrollable=False,
+            shape=ft.RoundedRectangleBorder(radius=RADII["xl"]),
+        )
+    else:
+        dialog_width = min(
+            DIALOG_MAX_WIDTH,
+            max(SPACING["3xl"], int((getattr(page, "width", None) or DIALOG_MAX_WIDTH + SPACING["3xl"]) - SPACING["3xl"])),
+        )
+        dlg = ft.AlertDialog(
+            content=ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Container(content=content_col, expand=True),
+                        management_action_bar if management_action_bar is not None else ft.Container(),
+                    ],
+                    spacing=0,
+                    expand=True,
+                ),
+                width=dialog_width,
+                height=dlg_height,
+                padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["sm"]),
+            ),
+            bgcolor=colors["surface"],
+            actions=[close_button],
+            shape=ft.RoundedRectangleBorder(radius=RADII["xl"]),
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
 
     open_dialog(page, dlg)

@@ -38,6 +38,8 @@ FONT_FAMILY = "Segoe UI"
 FONT_FAMILY_FALLBACK = ("Arial", "sans-serif")
 BREAKPOINT_MOBILE = 600
 BREAKPOINT_TABLET = 1024
+DIALOG_MAX_WIDTH = 960
+DIALOG_MAX_HEIGHT = 760
 
 TEXT_STYLES = {
     "display": {"size": 36, "weight": ft.FontWeight.BOLD},
@@ -57,6 +59,20 @@ SHADOW_STYLES = {
     "md": {"blur_radius": 14, "opacity": 0.08, "offset_y": 4},
     "lg": {"blur_radius": 24, "opacity": 0.12, "offset_y": 8},
 }
+CHART_PALETTE = (
+    "#1769AA", "#6C63C7", "#1F9D8B", "#D96B1D",
+    "#16865D", "#C33D4B", "#A8559E", "#5C6F82",
+)
+DEPARTMENT_COLORS = {
+    "CSE": "#1769AA",
+    "AIDS": "#6C63C7",
+    "E&TC": "#1F9D8B",
+    "MECH": "#D96B1D",
+    "CIVIL": "#16865D",
+}
+MOTION_FAST_MS = 140
+MOTION_NORMAL_MS = 220
+HOVER_SCALE = 1.015
 
 # Status Colors
 STATUS_COLORS = {
@@ -158,6 +174,8 @@ def get_button_style(
     variants = {
         "primary": (colors["primary"], "#FFFFFF", None),
         "secondary": (colors["secondary"], "#FFFFFF", None),
+        "danger": (colors["danger"], "#FFFFFF", None),
+        "danger_outline": (colors["surface"], colors["danger"], colors["danger"]),
         "outline": (colors["surface"], colors["primary"], colors["border"]),
         "text": (None, colors["primary"], None),
     }
@@ -205,6 +223,16 @@ def get_shadow(level: str = "md", is_dark: bool = False) -> list:
         color=ft.Colors.with_opacity(values["opacity"], shadow_color),
         offset=ft.Offset(0, values["offset_y"]),
     )]
+
+
+def get_chart_palette() -> tuple:
+    """Return the shared categorical chart colors."""
+    return CHART_PALETTE
+
+
+def get_department_color(code: str) -> str:
+    """Return a stable chart accent for a recognized department code."""
+    return DEPARTMENT_COLORS.get(str(code or "").upper(), COLOR_PRIMARY)
 
 
 def get_card_shadow(is_dark: bool = False) -> list:

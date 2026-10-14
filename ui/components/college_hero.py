@@ -5,18 +5,19 @@ and authentic college background components based on real campus imagery.
 
 from typing import Optional, Callable
 import flet as ft
-from ui.theme import get_theme_colors, COLOR_PRIMARY, COLOR_PRIMARY_LIGHT, get_card_shadow
+from ui.theme import get_theme_colors, get_card_shadow, get_button_style, RADII, SPACING
 
 COLLEGE_BUILDING_IMG = "/images/college_building.jpg"
 COLLEGE_STATUE_IMG = "/images/college_statue.jpg"
 
 
-def _complaint_lifecycle_strip(compact: bool = False) -> ft.Control:
+def _complaint_lifecycle_strip(compact: bool = False, is_dark: bool = False) -> ft.Control:
     """Small, static lifecycle guide that stays inexpensive on mobile GPUs."""
+    colors = get_theme_colors(is_dark)
     steps = [
-        (ft.Icons.DESCRIPTION_OUTLINED, "Submitted", "#2563eb"),
-        (ft.Icons.ACCOUNT_BALANCE_OUTLINED, "Department review", "#d97706"),
-        (ft.Icons.TASK_ALT, "Resolved", "#059669"),
+        (ft.Icons.DESCRIPTION_OUTLINED, "Submitted", colors["primary"]),
+        (ft.Icons.ACCOUNT_BALANCE_OUTLINED, "Department review", colors["warning"]),
+        (ft.Icons.TASK_ALT, "Resolved", colors["success"]),
     ]
     controls = []
     for index, (icon, label, color) in enumerate(steps):
@@ -32,13 +33,13 @@ def _complaint_lifecycle_strip(compact: bool = False) -> ft.Control:
                 ),
                 bgcolor=ft.Colors.with_opacity(0.18, ft.Colors.WHITE),
                 border=ft.Border.all(1, ft.Colors.with_opacity(0.2, ft.Colors.WHITE)),
-                border_radius=9,
-                padding=ft.padding.symmetric(horizontal=7, vertical=7),
+                border_radius=RADII["sm"],
+                padding=ft.padding.symmetric(horizontal=SPACING["sm"], vertical=SPACING["sm"]),
                 expand=True,
             )
         )
         if index < len(steps) - 1:
-            controls.append(ft.Icon(ft.Icons.ARROW_FORWARD, size=13, color="#bfdbfe"))
+            controls.append(ft.Icon(ft.Icons.ARROW_FORWARD, size=13, color=colors["primary_light"]))
     return ft.Row(controls=controls, spacing=5, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
 
@@ -60,14 +61,15 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                     ft.Image(
                         src=img_src,
                         fit=ft.ImageFit.COVER,
-                        width=1000,
+                        expand=True,
                         height=160,
                         border_radius=14,
                     ),
                     ft.Container(
-                        bgcolor=ft.Colors.with_opacity(0.68, "#0f172a" if is_dark else "#1e3a8a"),
-                        border_radius=14,
-                        padding=ft.padding.symmetric(horizontal=16, vertical=12),
+                        expand=True,
+                        bgcolor=ft.Colors.with_opacity(0.72, colors["bg"] if is_dark else colors["primary"]),
+                        border_radius=RADII["md"],
+                        padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["md"]),
                         content=ft.Column(
                             controls=[
                                 ft.Row(
@@ -81,7 +83,7 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                                     "A Cleaner, Safer and Better Campus Together",
                                     size=12,
                                     italic=True,
-                                    color="#93c5fd",
+                                    color=colors["primary_light"],
                                     weight=ft.FontWeight.W_500
                                 ),
                                 ft.Container(
@@ -90,7 +92,7 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                                     border_radius=6,
                                     padding=ft.padding.symmetric(horizontal=6, vertical=2)
                                 ),
-                                _complaint_lifecycle_strip(compact=True),
+                                _complaint_lifecycle_strip(compact=True, is_dark=is_dark),
                             ],
                             spacing=4,
                             alignment=ft.MainAxisAlignment.CENTER
@@ -98,7 +100,7 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                     )
                 ]
             ),
-            border_radius=14,
+            border_radius=RADII["md"],
             height=198,
             margin=ft.margin.only(bottom=8)
         )
@@ -116,23 +118,23 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                 ),
                 # Soft gradient overlay with subtle opacity to keep campus recognizable
                 ft.Container(
-                    bgcolor=ft.Colors.with_opacity(0.72 if is_dark else 0.65, "#0b1329" if is_dark else "#1e3a8a"),
-                    border_radius=20,
-                    padding=28,
+                    bgcolor=ft.Colors.with_opacity(0.76 if is_dark else 0.72, colors["bg"] if is_dark else colors["primary"]),
+                    border_radius=RADII["xl"],
+                    padding=SPACING["xl"],
                     content=ft.Column(
                         controls=[
                             # Institution Pill
                             ft.Container(
                                 content=ft.Row(
                                     controls=[
-                                        ft.Icon(ft.Icons.ACCOUNT_BALANCE, color="#93c5fd", size=15),
-                                        ft.Text("INSTITUTIONAL GRIEVANCE REDRESSAL", size=10, weight=ft.FontWeight.BOLD, color="#dbeafe"),
+                                        ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=colors["primary_light"], size=15),
+                                        ft.Text("INSTITUTIONAL GRIEVANCE REDRESSAL", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
                                     ],
                                     spacing=6,
                                 ),
-                                bgcolor=ft.Colors.with_opacity(0.25, "#172554"),
-                                border=ft.Border.all(1, ft.Colors.with_opacity(0.3, "#93c5fd")),
-                                border_radius=20,
+                                bgcolor=ft.Colors.with_opacity(0.16, colors["surface"]),
+                                border=ft.Border.all(1, ft.Colors.with_opacity(0.3, colors["primary_light"])),
+                                border_radius=RADII["pill"],
                                 padding=ft.padding.symmetric(horizontal=12, vertical=5),
                             ),
                             ft.Container(height=10),
@@ -146,38 +148,38 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                                 "A Cleaner, Safer and Better Campus Together",
                                 size=18,
                                 italic=True,
-                                color="#bfdbfe",
+                                color=colors["primary_light"],
                                 weight=ft.FontWeight.W_500
                             ),
                             ft.Container(height=8),
                             ft.Text(
                                 "Empowering students and faculty through transparent, confidential, and role-isolated grievance resolution.",
                                 size=13,
-                                color="#e2e8f0",
+                                color=ft.Colors.WHITE,
                                 height=1.4
                             ),
-                            _complaint_lifecycle_strip(),
+                            _complaint_lifecycle_strip(is_dark=is_dark),
                             ft.Container(expand=True),
                             # Highlights
                             ft.Column(
                                 controls=[
                                     ft.Row(
                                         controls=[
-                                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color="#4ade80"),
+                                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=colors["success"]),
                                             ft.Text("5 Core Academic Departments", size=12, color=ft.Colors.WHITE, weight=ft.FontWeight.W_500)
                                         ],
                                         spacing=8
                                     ),
                                     ft.Row(
                                         controls=[
-                                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color="#4ade80"),
+                                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=colors["success"]),
                                             ft.Text("Role Isolation & Anonymous Grievances", size=12, color=ft.Colors.WHITE, weight=ft.FontWeight.W_500)
                                         ],
                                         spacing=8
                                     ),
                                     ft.Row(
                                         controls=[
-                                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color="#4ade80"),
+                                            ft.Icon(ft.Icons.CHECK_CIRCLE, size=16, color=colors["success"]),
                                             ft.Text("Zero-Leakage Institutional Security", size=12, color=ft.Colors.WHITE, weight=ft.FontWeight.W_500)
                                         ],
                                         spacing=8
@@ -190,7 +192,7 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                             ft.Text(
                                 "Official Campus Portal • Real-Time Tracking",
                                 size=11,
-                                color="#94a3b8"
+                                color=colors["text_muted"]
                             )
                         ],
                         spacing=6,
@@ -199,7 +201,7 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                 )
             ]
         ),
-        border_radius=20,
+        border_radius=RADII["xl"],
         expand=True,
         shadow=get_card_shadow(is_dark)
     )
@@ -242,11 +244,7 @@ def create_dashboard_welcome_banner(
                 alignment=ft.MainAxisAlignment.CENTER,
                 spacing=6
             ),
-            style=ft.ButtonStyle(
-                bgcolor=colors["primary"],
-                padding=ft.padding.symmetric(horizontal=18, vertical=12),
-                shape=ft.RoundedRectangleBorder(radius=10)
-            ),
+            style=get_button_style(is_dark),
             on_click=lambda _: on_new_complaint()
         )
 
@@ -259,7 +257,7 @@ def create_dashboard_welcome_banner(
                         controls=[
                             ft.CircleAvatar(
                                 content=ft.Text(user_name[:1].upper() if user_name else "U", color=colors["primary"], weight=ft.FontWeight.BOLD),
-                                bgcolor=colors.get("surface_variant", "#e2e8f0"),
+                                bgcolor=colors["surface_variant"],
                                 radius=18
                             ),
                             ft.Column(
@@ -280,8 +278,8 @@ def create_dashboard_welcome_banner(
             ),
             bgcolor=colors["card_bg"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=14,
-            padding=14,
+            border_radius=RADII["md"],
+            padding=SPACING["md"],
             shadow=get_card_shadow(is_dark),
             margin=ft.margin.only(bottom=10)
         )
@@ -294,7 +292,7 @@ def create_dashboard_welcome_banner(
                     controls=[
                         ft.CircleAvatar(
                             content=ft.Text(user_name[:1].upper() if user_name else "U", size=18, color=colors["primary"], weight=ft.FontWeight.BOLD),
-                            bgcolor=colors.get("surface_variant", "#e2e8f0"),
+                            bgcolor=colors["surface_variant"],
                             radius=24
                         ),
                         ft.Column(
@@ -316,7 +314,7 @@ def create_dashboard_welcome_banner(
         ),
         bgcolor=colors["card_bg"],
         border=ft.Border.all(1, colors["border"]),
-        border_radius=16,
+        border_radius=RADII["lg"],
         padding=ft.padding.symmetric(horizontal=20, vertical=16),
         shadow=get_card_shadow(is_dark),
         margin=ft.margin.only(bottom=14)

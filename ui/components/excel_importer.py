@@ -6,7 +6,8 @@ import os
 from typing import Callable
 import flet as ft
 from services.roll_number_service import RollNumberService
-from ui.theme import COLOR_PRIMARY, COLOR_BORDER, COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED
+from ui.theme import get_theme_colors, get_button_style, get_text_style, RADII, SPACING
+from ui.state import AppState
 from ui.flet_compat import open_dialog, close_dialog
 from ui.components.page_file_services import open_spreadsheet_import_picker
 
@@ -18,7 +19,9 @@ def show_excel_importer_dialog(
     coordinator_id: str,
     on_imported: Callable[[], None]
 ):
-    selected_path = ft.Text("No file selected", italic=True, size=12, color=COLOR_TEXT_MUTED)
+    is_dark = AppState.is_dark_mode
+    colors = get_theme_colors(is_dark)
+    selected_path = ft.Text("No file selected", italic=True, size=12, color=colors["text_muted"])
     summary_container = ft.Column(spacing=8)
     selected_file_info = [None]
 
@@ -26,11 +29,11 @@ def show_excel_importer_dialog(
         selected_path.value = msg
         selected_path.italic = not primary and not error
         if error:
-            selected_path.color = "#dc2626"
+            selected_path.color = colors["danger"]
         elif primary:
-            selected_path.color = COLOR_PRIMARY
+            selected_path.color = colors["primary"]
         else:
-            selected_path.color = COLOR_TEXT_MUTED
+            selected_path.color = colors["text_muted"]
 
     def on_import_busy(busy: bool, message: str):
         if busy and message:
@@ -97,15 +100,15 @@ def show_excel_importer_dialog(
         _set_path_message("No file selected")
 
         metrics_rows = [
-            ft.Text(summary.get("message", ""), weight=ft.FontWeight.BOLD, size=13, color="#10b981" if summary.get("success") else "#dc2626"),
+            ft.Text(summary.get("message", ""), weight=ft.FontWeight.BOLD, size=13, color=colors["success"] if summary.get("success") else colors["danger"]),
             ft.Row(
                 controls=[
-                    _chip("Total", summary.get("total_rows", 0), "#3b82f6"),
-                    _chip("Valid", summary.get("valid", 0), "#10b981"),
-                    _chip("Added", summary.get("added", 0), "#059669"),
-                    _chip("Duplicates", summary.get("duplicates", 0), "#d97706"),
-                    _chip("Invalid", summary.get("invalid", 0), "#ef4444"),
-                    _chip("Failed", summary.get("failed", 0), "#991b1b")
+                    _chip("Total", summary.get("total_rows", 0), colors["primary"]),
+                    _chip("Valid", summary.get("valid", 0), colors["info"]),
+                    _chip("Added", summary.get("added", 0), colors["success"]),
+                    _chip("Duplicates", summary.get("duplicates", 0), colors["warning"]),
+                    _chip("Invalid", summary.get("invalid", 0), colors["danger"]),
+                    _chip("Failed", summary.get("failed", 0), colors["danger"])
                 ],
                 wrap=True,
                 spacing=8
@@ -114,10 +117,10 @@ def show_excel_importer_dialog(
 
         if summary.get("errors"):
             metrics_rows.append(
-                ft.Text("Errors:", size=12, weight=ft.FontWeight.BOLD, color="#dc2626")
+                ft.Text("Errors:", size=12, weight=ft.FontWeight.BOLD, color=colors["danger"])
             )
             for err in summary["errors"][:5]:
-                metrics_rows.append(ft.Text(f"• {err}", size=11, color="#ef4444"))
+                metrics_rows.append(ft.Text(f"• {err}", size=11, color=colors["danger"]))
 
         summary_container.controls = metrics_rows
         page.update()
@@ -133,34 +136,36 @@ def show_excel_importer_dialog(
                 spacing=4
             ),
             bgcolor=ft.Colors.with_opacity(0.12, color),
-            border_radius=8,
-            padding=ft.padding.symmetric(horizontal=8, vertical=4)
+            border_radius=RADII["sm"],
+            padding=ft.padding.symmetric(horizontal=SPACING["sm"], vertical=SPACING["xs"])
         )
 
     import_btn = ft.ElevatedButton(
         text="Import File",
         icon=ft.Icons.UPLOAD_FILE,
         disabled=True,
+        style=get_button_style(is_dark),
         on_click=run_import
     )
 
     dlg = ft.AlertDialog(
         title=ft.Row(
             controls=[
-                ft.Icon(ft.Icons.TABLE_VIEW, color=COLOR_PRIMARY),
-                ft.Text("Import Roll Numbers from Excel", size=18, weight=ft.FontWeight.BOLD)
+                ft.Icon(ft.Icons.TABLE_VIEW, color=colors["primary"]),
+                ft.Text("Import Roll Numbers from Excel", style=get_text_style("title", is_dark))
             ],
             spacing=8
         ),
         content=ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text("Upload an Excel (.xlsx, .xls) or CSV file containing student roll numbers.", size=13, color=COLOR_TEXT_PRIMARY),
+                    ft.Text("Upload an Excel (.xlsx, .xls) or CSV file containing student roll numbers.", style=get_text_style("body", is_dark)),
                     ft.Row(
                         controls=[
                             ft.ElevatedButton(
                                 "Choose File",
                                 icon=ft.Icons.FILE_UPLOAD,
+                                style=get_button_style(is_dark, variant="outline", size="sm"),
                                 on_click=on_choose_file
                             ),
                             ft.Container(content=selected_path, expand=True)
@@ -171,7 +176,7 @@ def show_excel_importer_dialog(
                         wrap=True
                     ),
                     import_btn,
-                    ft.Divider(color=COLOR_BORDER),
+                    ft.Divider(color=colors["border"]),
                     summary_container
                 ],
                 spacing=14,
@@ -179,12 +184,16 @@ def show_excel_importer_dialog(
                 tight=True,
             ),
             width=min(540, (page.width or 540) - 32),
-            padding=0,
+            padding=SPACING["lg"],
+            border_radius=RADII["lg"],
+            bgcolor=colors["surface"],
         ),
         actions=[
-            ft.TextButton("Close", on_click=lambda _: close_dialog(page, dlg))
+            ft.TextButton("Close", style=get_button_style(is_dark, variant="text"), on_click=lambda _: close_dialog(page, dlg))
         ],
-        actions_alignment=ft.MainAxisAlignment.END
+        actions_alignment=ft.MainAxisAlignment.END,
+        bgcolor=colors["surface"],
+        shape=ft.RoundedRectangleBorder(radius=RADII["lg"]),
     )
 
     open_dialog(page, dlg)

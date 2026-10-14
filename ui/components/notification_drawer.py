@@ -5,7 +5,7 @@ ui/components/notification_drawer.py: In-app Notification Center dialog with mar
 from typing import Callable, Optional
 import flet as ft
 from services.notification_service import NotificationService
-from ui.theme import COLOR_PRIMARY, COLOR_BORDER, COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED
+from ui.theme import get_button_style, get_text_style, RADII, SPACING
 from utils.helpers import format_datetime
 from ui.flet_compat import open_dialog, close_dialog
 
@@ -49,7 +49,7 @@ def show_notification_dialog(
             size=13,
             color=colors["text"]
         )
-        time_ctrl = ft.Text(t_str, size=11, color=colors["text_muted"])
+        time_ctrl = ft.Text(t_str, style=get_text_style("caption", is_dark))
         msg_ctrl = ft.Text(
             msg,
             size=12,
@@ -116,7 +116,7 @@ def show_notification_dialog(
             read_btn = ft.IconButton(
                 icon=ft.Icons.CHECK,
                 tooltip="Mark as read",
-                icon_color="#059669",
+                icon_color=colors["success"],
                 icon_size=18,
                 on_click=make_mark_read_handler(nid, tracker)
             )
@@ -163,11 +163,11 @@ def show_notification_dialog(
                 spacing=8,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER
             ),
-            bgcolor=colors["surface"] if is_read else ("#1e293b" if is_dark else "#f0f7ff"),
+            bgcolor=colors["surface"] if is_read else ft.Colors.with_opacity(0.08, colors["primary"]),
             border=ft.Border.all(1, colors["border"] if is_read else colors["primary"]),
-            border_radius=8,
-            padding=10,
-            margin=ft.margin.only(bottom=6),
+            border_radius=RADII["md"],
+            padding=SPACING["md"],
+            margin=ft.margin.only(bottom=SPACING["sm"]),
             on_click=make_click_note_handler(nid, ref_type, ref_id, not is_read, tracker)
         )
         tracker["container"] = card_container
@@ -185,7 +185,7 @@ def show_notification_dialog(
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     alignment=ft.MainAxisAlignment.CENTER
                 ),
-                padding=40
+                padding=SPACING["3xl"]
             )
         )
 
@@ -231,10 +231,12 @@ def show_notification_dialog(
                     controls=[
                         ft.TextButton(
                             content=ft.Row([ft.Icon(ft.Icons.DONE_ALL, size=15), ft.Text("Mark Read", size=12)]),
+                            style=get_button_style(is_dark, variant="text", size="sm"),
                             on_click=mark_all_read
                         ),
                         ft.TextButton(
                             content=ft.Row([ft.Icon(ft.Icons.DELETE_SWEEP, size=15), ft.Text("Clear Read", size=12)]),
+                            style=get_button_style(is_dark, variant="text", size="sm"),
                             on_click=clear_all_read
                         )
                     ],
@@ -245,10 +247,11 @@ def show_notification_dialog(
         ),
         content=ft.Container(
             content=ft.Column(controls=notification_items, scroll=ft.ScrollMode.AUTO),
-            width=540,
-            height=440
+            width=min(540, max(0, (page.width or 540) - 32)),
+            height=min(440, max(0, (page.height or 440) - 160))
         ),
         bgcolor=colors["surface"],
+        shape=ft.RoundedRectangleBorder(radius=RADII["lg"]),
         actions=[
             ft.TextButton("Close", on_click=lambda _: close_dialog(page, dlg))
         ],
