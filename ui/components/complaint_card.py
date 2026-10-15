@@ -85,6 +85,7 @@ def create_complaint_card(
                         ft.Text(str(department_name), size=11, color=colors["text_muted"]),
                     ],
                     spacing=4,
+                    tight=True,
                 ),
                 bgcolor=colors["surface_variant"],
                 border_radius=RADII["sm"],
@@ -100,6 +101,7 @@ def create_complaint_card(
                     ft.Text(str(attachment_count), size=11, color=colors["text_muted"]),
                 ],
                 spacing=3,
+                tight=True,
             ),
             bgcolor=colors["surface_variant"],
             border_radius=RADII["sm"],
@@ -114,7 +116,8 @@ def create_complaint_card(
                     ft.Icon(ft.Icons.LOCATION_ON_OUTLINED, size=12, color=colors["text_muted"]),
                     ft.Text(loc_name, size=11, color=colors["text_muted"])
                 ],
-                spacing=2
+                spacing=2,
+                tight=True,
             )
         )
     )
@@ -127,7 +130,8 @@ def create_complaint_card(
                         ft.Icon(ft.Icons.CALENDAR_TODAY_OUTLINED, size=11, color=colors["text_muted"]),
                         ft.Text(date_str, size=11, color=colors["text_muted"])
                     ],
-                    spacing=2
+                    spacing=2,
+                    tight=True,
                 )
             )
         )
@@ -150,7 +154,8 @@ def create_complaint_card(
                         ft.Icon(ft.Icons.VISIBILITY_OFF, size=12, color=colors["text_muted"]),
                         ft.Text("Anonymous", size=11, weight=ft.FontWeight.W_600, color=colors["text_muted"])
                     ],
-                    spacing=3
+                    spacing=3,
+                    tight=True,
                 ),
                 bgcolor=colors["surface_variant"],
                 border_radius=RADII["sm"],
@@ -187,7 +192,7 @@ def create_complaint_card(
                                 PriorityBadge(priority, is_dark)
                             ],
                             spacing=8,
-                            wrap=True
+                            tight=True,
                         ),
                         ft.Row(
                             controls=[

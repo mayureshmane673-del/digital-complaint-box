@@ -319,6 +319,7 @@ def StatusBadge(status: str, is_dark: bool = False) -> ft.Container:
                 ft.Text(status, size=11, weight=ft.FontWeight.W_600, color=text_color),
             ],
             spacing=5,
+            tight=True,
             alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.CENTER
         ),
@@ -350,6 +351,7 @@ def PriorityBadge(priority: str, is_dark: bool = False) -> ft.Container:
                 ft.Text(priority, size=11, weight=ft.FontWeight.W_600, color=p_color),
             ],
             spacing=5,
+            tight=True,
             alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.CENTER
         ),
@@ -381,7 +383,7 @@ def SectionHeader(
     heading_controls = []
     if icon is not None:
         heading_controls.append(ft.Icon(icon, size=20, color=colors["primary"]))
-    heading_controls.append(ft.Text(title, style=get_text_style("h3", is_dark)))
+    heading_controls.append(ft.Text(title, style=get_text_style("h3", is_dark), expand=True))
     heading = ft.Column(
         controls=[
             ft.Row(controls=heading_controls, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -389,6 +391,7 @@ def SectionHeader(
         ],
         spacing=4,
         tight=True,
+        expand=True,
     )
     controls = [heading]
     if action is not None:

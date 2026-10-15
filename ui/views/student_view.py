@@ -77,6 +77,11 @@ class StudentView:
         self.roll_number = student["roll_number"]
         self.department_id = student["department_id"]
         self.selected_tab_index = initial_tab
+        try:
+            if hasattr(self.page, "session") and self.page.session and hasattr(self.page.session, "store") and self.page.session.store:
+                self.page.session.store.set("active_tab_index", initial_tab)
+        except Exception:
+            pass
         self.cached_complaints = None
         self._dashboard_loading = False
         self._dashboard_error: Optional[str] = None
@@ -443,7 +448,7 @@ class StudentView:
                         ft.Icon(ft.Icons.ERROR_OUTLINE, color="#dc2626"),
                         ft.Text(self._dashboard_error, size=13, color=colors["text_muted"], expand=True),
                         ft.ElevatedButton("Retry", icon=ft.Icons.REFRESH, on_click=retry_dashboard),
-                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=10, wrap=True),
+                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
                     padding=24,
                     border_radius=12,
                     bgcolor=colors.get("card_bg", colors.get("surface", "#ffffff")),
@@ -1206,35 +1211,45 @@ class StudentView:
         )
 
         def make_stepper_header(active_step: int) -> ft.Control:
+            is_mobile = (self._viewport_layout() == "mobile")
             items: List[ft.Control] = []
             for idx, name in enumerate(wizard_step_names):
                 active_or_done = idx <= active_step
+                is_current = (idx == active_step)
                 accent = colors["primary"] if active_or_done else colors["text_muted"]
+                show_label = not is_mobile or is_current
+
+                step_row_controls = [
+                    ft.Container(
+                        content=ft.Text(str(idx + 1), size=11, weight=ft.FontWeight.BOLD,
+                                        color=ft.Colors.WHITE if active_or_done else colors["text_muted"]),
+                        bgcolor=colors["primary"] if active_or_done else colors["surface_variant"],
+                        border_radius=RADII["pill"], width=24, height=24,
+                        alignment=ft.Alignment.CENTER,
+                    ),
+                ]
+                if show_label:
+                    step_row_controls.append(
+                        ft.Text(name, style=get_text_style("body_small", is_dark,
+                                                           color=accent,
+                                                           weight=ft.FontWeight.W_600 if is_current else ft.FontWeight.NORMAL))
+                    )
+
                 items.append(ft.Container(
                     content=ft.Row(
-                        controls=[
-                            ft.Container(
-                                content=ft.Text(str(idx + 1), size=11, weight=ft.FontWeight.BOLD,
-                                                color=ft.Colors.WHITE if active_or_done else colors["text_muted"]),
-                                bgcolor=colors["primary"] if active_or_done else colors["surface_variant"],
-                                border_radius=RADII["pill"], width=24, height=24,
-                                alignment=ft.Alignment.CENTER,
-                            ),
-                            ft.Text(name, style=get_text_style("body_small", is_dark,
-                                                               color=accent,
-                                                               weight=ft.FontWeight.W_600 if idx == active_step else ft.FontWeight.NORMAL)),
-                        ],
+                        controls=step_row_controls,
                         spacing=SPACING["xs"],
+                        tight=True,
                     ),
-                    bgcolor=ft.Colors.with_opacity(0.08, colors["primary"]) if idx == active_step else None,
+                    bgcolor=ft.Colors.with_opacity(0.08, colors["primary"]) if is_current else None,
                     border_radius=RADII["pill"],
                     padding=ft.padding.symmetric(horizontal=SPACING["sm"], vertical=SPACING["xs"]),
                     animate=MOTION_NORMAL_MS,
                 ))
                 if idx < len(wizard_step_names) - 1:
-                    items.append(ft.Icon(ft.Icons.CHEVRON_RIGHT, size=16, color=colors["border"]))
+                    items.append(ft.Icon(ft.Icons.CHEVRON_RIGHT, size=14 if is_mobile else 16, color=colors["border"]))
             return ft.Container(
-                content=ft.Row(controls=items, wrap=True, spacing=SPACING["xs"]),
+                content=ft.Row(controls=items, wrap=False, scroll=ft.ScrollMode.AUTO if is_mobile else None, spacing=SPACING["xs"]),
                 padding=ft.padding.symmetric(vertical=SPACING["xs"]),
             )
 
@@ -1850,7 +1865,6 @@ class StudentView:
                             )
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        wrap=True,
                     ),
                     _row("Title", comp.get("title") or "—"),
                     _row("Description", comp.get("description") or "—"),
@@ -2252,12 +2266,11 @@ class StudentView:
                                                 )
                                             ],
                                             spacing=6,
-                                            wrap=True,
+                                            tight=True,
                                         )
                                     ],
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                    wrap=True,
                                 ),
                                 # Metadata: Category, Department, Resolved Date
                                 ft.Row(
@@ -2305,7 +2318,6 @@ class StudentView:
                                     ],
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                    wrap=True,
                                 )
                             ],
                             spacing=8
