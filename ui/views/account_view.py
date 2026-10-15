@@ -17,7 +17,9 @@ import string
 from services.account_service import AccountService
 from ui.theme import (
     COLOR_PRIMARY, COLOR_SURFACE, COLOR_BORDER, COLOR_TEXT_PRIMARY,
-    COLOR_TEXT_MUTED, STATUS_COLORS, get_theme_colors
+    COLOR_TEXT_MUTED, STATUS_COLORS, get_theme_colors, get_input_style,
+    get_button_style, get_responsive_layout, PageContainer, EmptyState,
+    SectionHeader, get_text_style, SPACING, RADII,
 )
 from ui.state import AppState
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
@@ -92,18 +94,26 @@ class AccountView:
                 sections.append(f_lib.result())
                 sections.append(f_gen.result())
 
-        return ft.Container(
+        viewport_width = getattr(self.page, "width", None)
+        layout = get_responsive_layout(viewport_width if isinstance(viewport_width, (int, float)) else None)
+        page_padding = SPACING["sm"] if layout == "mobile" else (SPACING["md"] if layout == "tablet" else SPACING["lg"])
+        return PageContainer(
             content=ft.Column(
                 controls=[
-                    ft.Text("Account & Profile Management", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                    ft.Text("Manage your personal profile, credentials, and institutional oversight.", size=13, color=colors["text_muted"]),
-                    ft.Divider(color=colors["border"]),
+                    SectionHeader(
+                        "Account & Profile Management",
+                        "Manage your personal profile, credentials, and institutional oversight.",
+                        icon=ft.Icons.MANAGE_ACCOUNTS,
+                        is_dark=is_dark,
+                    ),
                     *sections
                 ],
-                spacing=16,
+                spacing=SPACING["lg"],
                 scroll=ft.ScrollMode.AUTO,
                 expand=True
             ),
+            padding=page_padding,
+            is_dark=is_dark,
             expand=True
         )
 
@@ -120,11 +130,11 @@ class AccountView:
         status_text = "Active" if (is_active and not is_locked) else ("Locked" if is_locked else "Inactive")
         status_color = "#10b981" if status_text == "Active" else "#ef4444"
 
-        name_field = ft.TextField(label="Full Name", value=full_name, dense=True, width=320)
+        name_field = ft.TextField(**get_input_style(is_dark), label="Full Name", value=full_name, dense=True)
         save_btn = ft.ElevatedButton(
             content=ft.Text("Save Changes"),
             icon=ft.Icons.SAVE,
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
 
         def save_profile(e):
@@ -218,22 +228,22 @@ class AccountView:
             ),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=12,
-            padding=16
+            border_radius=RADII["lg"],
+            padding=SPACING["lg"]
         )
 
     # -------------------------------------------------------------------------
     # SECTION 2: OWN PASSWORD CHANGE
     # -------------------------------------------------------------------------
     def _render_password_change_card(self, colors: Dict[str, str], is_dark: bool) -> ft.Control:
-        curr_pass_field = ft.TextField(label="Current Password", password=True, can_reveal_password=True, dense=True, width=320)
-        new_pass_field = ft.TextField(label="New Password", password=True, can_reveal_password=True, dense=True, width=320)
-        confirm_pass_field = ft.TextField(label="Confirm New Password", password=True, can_reveal_password=True, dense=True, width=320)
+        curr_pass_field = ft.TextField(**get_input_style(is_dark), label="Current Password", password=True, can_reveal_password=True, dense=True)
+        new_pass_field = ft.TextField(**get_input_style(is_dark), label="New Password", password=True, can_reveal_password=True, dense=True)
+        confirm_pass_field = ft.TextField(**get_input_style(is_dark), label="Confirm New Password", password=True, can_reveal_password=True, dense=True)
 
         change_btn = ft.ElevatedButton(
             content=ft.Text("Update Password"),
             icon=ft.Icons.LOCK_RESET,
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
 
         def do_change_password(e):
@@ -299,8 +309,8 @@ class AccountView:
             ),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=12,
-            padding=16
+            border_radius=RADII["lg"],
+            padding=SPACING["lg"]
         )
 
     # -------------------------------------------------------------------------
@@ -394,8 +404,8 @@ class AccountView:
             ),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, ft.Colors.with_opacity(0.3, "#dc2626")),
-            border_radius=12,
-            padding=16
+            border_radius=RADII["lg"],
+            padding=SPACING["lg"]
         )
 
     # -------------------------------------------------------------------------
@@ -405,6 +415,7 @@ class AccountView:
         coords = AccountService.list_department_coordinators(self.user_id)
 
         rows = []
+        mobile_cards = []
         for c in coords:
             cid = c["id"]
             username = c.get("username", "")
@@ -418,8 +429,8 @@ class AccountView:
 
             def make_reset_dialog_handler(target_id=cid, target_user=username):
                 def open_reset_dialog(e):
-                    new_pw_field = ft.TextField(label="New Password", password=True, can_reveal_password=True, dense=True)
-                    conf_pw_field = ft.TextField(label="Confirm Password", password=True, can_reveal_password=True, dense=True)
+                    new_pw_field = ft.TextField(**get_input_style(is_dark), label="New Password", password=True, can_reveal_password=True, dense=True)
+                    conf_pw_field = ft.TextField(**get_input_style(is_dark), label="Confirm Password", password=True, can_reveal_password=True, dense=True)
 
                     def do_reset(e_rst):
                         p1 = new_pw_field.value or ""
@@ -521,6 +532,37 @@ class AccountView:
                     ]
                 )
             )
+            mobile_cards.append(
+                ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            ft.Text(name or username, style=get_text_style("title", is_dark), max_lines=2),
+                            ft.Text(f"Username: {username}", style=get_text_style("body_small", is_dark), selectable=True),
+                            ft.Row(
+                                controls=[
+                                    ft.Container(ft.Text(status_text, style=get_text_style("caption", is_dark, color=st_color, weight=ft.FontWeight.BOLD)), bgcolor=ft.Colors.with_opacity(0.12, st_color), border_radius=RADII["pill"], padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["xs"])),
+                                    ft.Text(f"Registered {created_at or '—'}", style=get_text_style("caption", is_dark), expand=True),
+                                ],
+                                wrap=True,
+                                spacing=SPACING["sm"],
+                            ),
+                            ft.Row(
+                                controls=[
+                                    ft.TextButton("Reset Password", icon=ft.Icons.PASSWORD, on_click=make_reset_dialog_handler()),
+                                    ft.TextButton("Deactivate" if is_active else "Reactivate", icon=ft.Icons.BLOCK if is_active else ft.Icons.CHECK_CIRCLE, on_click=make_toggle_active_handler()),
+                                ],
+                                wrap=True,
+                                spacing=SPACING["xs"],
+                            ),
+                        ],
+                        spacing=SPACING["sm"],
+                    ),
+                    bgcolor=colors["surface"],
+                    border=ft.Border.all(1, colors["border"]),
+                    border_radius=RADII["md"],
+                    padding=SPACING["md"],
+                )
+            )
 
         table = ft.DataTable(
             columns=[
@@ -535,6 +577,13 @@ class AccountView:
             border_radius=8
         )
 
+        viewport_width = getattr(self.page, "width", None)
+        use_cards = get_responsive_layout(viewport_width if isinstance(viewport_width, (int, float)) else None) != "desktop"
+        list_content = (
+            ft.Column(controls=mobile_cards, spacing=SPACING["sm"], visible=True)
+            if use_cards and mobile_cards
+            else (ft.Row(controls=[table], scroll=ft.ScrollMode.AUTO) if rows else EmptyState("No coordinators", "No coordinators are currently assigned to your department.", is_dark=is_dark))
+        )
         return ft.Container(
             content=ft.Column(
                 controls=[
@@ -546,14 +595,14 @@ class AccountView:
                         spacing=8
                     ),
                     ft.Text("As HOD, you can view, reset credentials, and manage Coordinators assigned to your department.", size=12, color=colors["text_muted"]),
-                    ft.Row(controls=[table], scroll=ft.ScrollMode.AUTO) if rows else ft.Text("No Coordinators found in your department.", italic=True, size=13, color=colors["text_muted"])
+                    list_content
                 ],
                 spacing=12
             ),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=12,
-            padding=16
+            border_radius=RADII["lg"],
+            padding=SPACING["lg"]
         )
 
     # -------------------------------------------------------------------------
@@ -563,6 +612,7 @@ class AccountView:
         hods = AccountService.list_hods_for_principal(self.user_id)
 
         rows = []
+        mobile_cards = []
         for h in hods:
             hid = h["id"]
             username = h.get("username", "")
@@ -578,8 +628,8 @@ class AccountView:
 
             def make_reset_hod_dialog(target_id=hid, target_user=username):
                 def open_dialog_handler(e):
-                    new_pw_field = ft.TextField(label="New Password", password=True, can_reveal_password=True, dense=True)
-                    conf_pw_field = ft.TextField(label="Confirm Password", password=True, can_reveal_password=True, dense=True)
+                    new_pw_field = ft.TextField(**get_input_style(is_dark), label="New Password", password=True, can_reveal_password=True, dense=True)
+                    conf_pw_field = ft.TextField(**get_input_style(is_dark), label="Confirm Password", password=True, can_reveal_password=True, dense=True)
 
                     def do_reset(e_rst):
                         p1 = new_pw_field.value or ""
@@ -682,6 +732,37 @@ class AccountView:
                     ]
                 )
             )
+            mobile_cards.append(
+                ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            ft.Text(name or username, style=get_text_style("title", is_dark), max_lines=2),
+                            ft.Text(f"{dept_code} · {username}", style=get_text_style("body_small", is_dark), selectable=True),
+                            ft.Row(
+                                controls=[
+                                    ft.Container(ft.Text(status_text, style=get_text_style("caption", is_dark, color=st_color, weight=ft.FontWeight.BOLD)), bgcolor=ft.Colors.with_opacity(0.12, st_color), border_radius=RADII["pill"], padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["xs"])),
+                                    ft.Text(f"Registered {created_at or '—'}", style=get_text_style("caption", is_dark), expand=True),
+                                ],
+                                wrap=True,
+                                spacing=SPACING["sm"],
+                            ),
+                            ft.Row(
+                                controls=[
+                                    ft.TextButton("Reset Password", icon=ft.Icons.PASSWORD, on_click=make_reset_hod_dialog()),
+                                    ft.TextButton("Deactivate" if is_active else "Reactivate", icon=ft.Icons.BLOCK if is_active else ft.Icons.CHECK_CIRCLE, on_click=make_toggle_hod()),
+                                ],
+                                wrap=True,
+                                spacing=SPACING["xs"],
+                            ),
+                        ],
+                        spacing=SPACING["sm"],
+                    ),
+                    bgcolor=colors["surface"],
+                    border=ft.Border.all(1, colors["border"]),
+                    border_radius=RADII["md"],
+                    padding=SPACING["md"],
+                )
+            )
 
         table = ft.DataTable(
             columns=[
@@ -697,6 +778,13 @@ class AccountView:
             border_radius=8
         )
 
+        viewport_width = getattr(self.page, "width", None)
+        use_cards = get_responsive_layout(viewport_width if isinstance(viewport_width, (int, float)) else None) != "desktop"
+        list_content = (
+            ft.Column(controls=mobile_cards, spacing=SPACING["sm"], visible=True)
+            if use_cards and mobile_cards
+            else (ft.Row(controls=[table], scroll=ft.ScrollMode.AUTO) if rows else EmptyState("No department heads", "No HOD accounts are registered.", is_dark=is_dark))
+        )
         return ft.Container(
             content=ft.Column(
                 controls=[
@@ -708,14 +796,14 @@ class AccountView:
                         spacing=8
                     ),
                     ft.Text("As Principal, you have campus-wide authority to oversee and manage all Head of Department accounts.", size=12, color=colors["text_muted"]),
-                    ft.Row(controls=[table], scroll=ft.ScrollMode.AUTO) if rows else ft.Text("No HOD accounts registered.", italic=True, size=13, color=colors["text_muted"])
+                    list_content
                 ],
                 spacing=12
             ),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=12,
-            padding=16
+            border_radius=RADII["lg"],
+            padding=SPACING["lg"]
         )
 
     # -------------------------------------------------------------------------
@@ -736,8 +824,8 @@ class AccountView:
             st_color = "#10b981" if status_text == "Active" else "#ef4444"
 
             def open_reset_hi_dialog(e):
-                new_pw_field = ft.TextField(label="New Password", password=True, can_reveal_password=True, dense=True)
-                conf_pw_field = ft.TextField(label="Confirm Password", password=True, can_reveal_password=True, dense=True)
+                new_pw_field = ft.TextField(**get_input_style(is_dark), label="New Password", password=True, can_reveal_password=True, dense=True)
+                conf_pw_field = ft.TextField(**get_input_style(is_dark), label="Confirm Password", password=True, can_reveal_password=True, dense=True)
 
                 def do_reset(e_rst):
                     p1 = new_pw_field.value or ""
@@ -860,8 +948,8 @@ class AccountView:
             ),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=12,
-            padding=16
+            border_radius=RADII["lg"],
+            padding=SPACING["lg"]
         )
 
     # -------------------------------------------------------------------------
@@ -872,7 +960,7 @@ class AccountView:
 
         sub_text = "Department student management: View registered students in your department (excluding First Year) and reset credentials."
 
-        search_field = ft.TextField(
+        search_field = ft.TextField(**get_input_style(is_dark),
             hint_text="Search students by roll number or name...",
             prefix_icon=ft.Icons.SEARCH,
             dense=True,
@@ -884,7 +972,7 @@ class AccountView:
         def make_student_reset_dialog(s_id: str, s_roll: str, s_name: str, s_dept_code: str):
             def open_dialog_handler(e):
                 unique_temp_pw = generate_secure_temporary_password()
-                new_pw_field = ft.TextField(
+                new_pw_field = ft.TextField(**get_input_style(is_dark),
                     label="Temporary Password",
                     value=unique_temp_pw,
                     password=False,
@@ -1079,8 +1167,8 @@ class AccountView:
             ),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=12,
-            padding=16
+            border_radius=RADII["lg"],
+            padding=SPACING["lg"]
         )
 
     # Backward compatibility alias
@@ -1104,8 +1192,8 @@ class AccountView:
             st_color = "#10b981" if status_text == "Active" else "#ef4444"
 
             def open_reset_lib_dialog(e):
-                new_pw_field = ft.TextField(label="New Password", password=True, can_reveal_password=True, dense=True)
-                conf_pw_field = ft.TextField(label="Confirm Password", password=True, can_reveal_password=True, dense=True)
+                new_pw_field = ft.TextField(**get_input_style(is_dark), label="New Password", password=True, can_reveal_password=True, dense=True)
+                conf_pw_field = ft.TextField(**get_input_style(is_dark), label="Confirm Password", password=True, can_reveal_password=True, dense=True)
 
                 def do_reset(e_rst):
                     p1 = new_pw_field.value or ""
@@ -1188,8 +1276,8 @@ class AccountView:
             ),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=12,
-            padding=16
+            border_radius=RADII["lg"],
+            padding=SPACING["lg"]
         )
 
     # -------------------------------------------------------------------------
@@ -1210,8 +1298,8 @@ class AccountView:
             st_color = "#10b981" if status_text == "Active" else "#ef4444"
 
             def open_reset_gen_dialog(e):
-                new_pw_field = ft.TextField(label="New Password", password=True, can_reveal_password=True, dense=True)
-                conf_pw_field = ft.TextField(label="Confirm Password", password=True, can_reveal_password=True, dense=True)
+                new_pw_field = ft.TextField(**get_input_style(is_dark), label="New Password", password=True, can_reveal_password=True, dense=True)
+                conf_pw_field = ft.TextField(**get_input_style(is_dark), label="Confirm Password", password=True, can_reveal_password=True, dense=True)
 
                 def do_reset(e_rst):
                     p1 = new_pw_field.value or ""
@@ -1294,6 +1382,6 @@ class AccountView:
             ),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=12,
-            padding=16
+            border_radius=RADII["lg"],
+            padding=SPACING["lg"]
         )

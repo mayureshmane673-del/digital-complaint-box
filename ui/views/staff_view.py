@@ -19,7 +19,9 @@ from services.cache_service import CacheService
 from database.supabase_client import get_supabase_client
 from ui.theme import (
     COLOR_PRIMARY, COLOR_SURFACE, COLOR_BORDER, COLOR_TEXT_PRIMARY,
-    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow
+    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow,
+    get_responsive_layout, PageContainer, EmptyState, StatusBadge, PriorityBadge,
+    get_input_style, get_button_style, SPACING, RADII, MOTION_NORMAL_MS,
 )
 from ui.state import AppState
 from ui.components.college_hero import create_dashboard_welcome_banner
@@ -146,6 +148,15 @@ class StaffView:
         try:
             target_func = views[index] if index < len(views) else self._render_dashboard
             view_content = target_func()
+            viewport_width = getattr(self.page, "width", None)
+            layout = get_responsive_layout(viewport_width if isinstance(viewport_width, (int, float)) else None)
+            page_padding = SPACING["sm"] if layout == "mobile" else (SPACING["md"] if layout == "tablet" else SPACING["lg"])
+            view_content = PageContainer(
+                content=view_content,
+                padding=page_padding,
+                is_dark=AppState.is_dark_mode,
+                expand=True,
+            )
             self._tab_cache[index] = view_content
             self.active_container.content = view_content
             self.page.update()
@@ -397,7 +408,7 @@ class StaffView:
                     ft.ElevatedButton(
                         content=ft.Text("View All Complaints"),
                         icon=ft.Icons.LIST,
-                        style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
+                        style=get_button_style(is_dark),
                         on_click=lambda _: self._switch_view(1)
                     )
                 ],
@@ -432,7 +443,7 @@ class StaffView:
 
         is_principal = (self.role == UserRole.PRINCIPAL.value)
 
-        search_field = ft.TextField(hint_text="Search by Complaint ID or Keyword...", prefix_icon=ft.Icons.SEARCH, dense=True, expand=True)
+        search_field = ft.TextField(**get_input_style(is_dark), hint_text="Search by Complaint ID or Keyword...", prefix_icon=ft.Icons.SEARCH, dense=True, expand=True)
         status_filter = ft.Dropdown(
             label="Status",
             options=[
@@ -707,22 +718,48 @@ class StaffView:
         filter_row_controls.append(ft.Container(category_filter, col={"xs": 6, "sm": 3, "md": 1.7 if is_principal else 2}))
         filter_row_controls.append(ft.Container(subcategory_filter, col={"xs": 6, "sm": 3, "md": 1.6 if is_principal else 2}))
 
+        viewport_width = getattr(self.page, "width", None)
+        is_mobile = get_responsive_layout(viewport_width if isinstance(viewport_width, (int, float)) else None) == "mobile"
+        filters_expanded = [not is_mobile]
+        filter_panel = ft.Container(
+            content=ft.ResponsiveRow(controls=filter_row_controls, spacing=SPACING["sm"], run_spacing=SPACING["sm"]),
+            visible=filters_expanded[0],
+            animate=MOTION_NORMAL_MS,
+            bgcolor=colors["surface"],
+            border=ft.Border.all(1, colors["border"]),
+            border_radius=RADII["lg"],
+            padding=SPACING["md"],
+        )
+        filter_toggle = ft.TextButton("Filters", icon=ft.Icons.FILTER_LIST, visible=is_mobile)
+
+        def toggle_filter_panel(_):
+            filters_expanded[0] = not filters_expanded[0]
+            filter_panel.visible = filters_expanded[0]
+            filter_toggle.text = "Hide filters" if filters_expanded[0] else "Filters"
+            filter_toggle.icon = ft.Icons.FILTER_LIST_OFF if filters_expanded[0] else ft.Icons.FILTER_LIST
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        filter_toggle.on_click = toggle_filter_panel
+
         return ft.Column(
             controls=[
                 ft.Row(
                     controls=[
-                        ft.Text("Grievance Management", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                        ft.Text("Grievance Management", size=22, weight=ft.FontWeight.BOLD, color=colors["text"], expand=True),
+                        filter_toggle,
                         ft.IconButton(
                             icon=ft.Icons.REFRESH,
                             tooltip="Refresh from Server",
                             on_click=lambda _: refresh_list(force_reload=True)
                         )
                     ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    wrap=True,
                 ),
-                ft.ResponsiveRow(
-                    controls=filter_row_controls
-                ),
+                filter_panel,
                 ft.Divider(color=colors["border"]),
                 complaints_container
             ],
@@ -758,13 +795,8 @@ class StaffView:
                     ft.Row(
                         controls=[
                             ft.Text(f"#{m_cid}", weight=ft.FontWeight.BOLD, size=13, color=colors["primary"]),
-                            ft.Container(
-                                content=ft.Text(m_st, size=11, color=STATUS_COLORS.get(m_st, "#6b7280"), weight=ft.FontWeight.W_600),
-                                bgcolor=ft.Colors.with_opacity(0.12, STATUS_COLORS.get(m_st, "#6b7280")),
-                                border_radius=20,
-                                padding=ft.padding.symmetric(horizontal=8, vertical=2)
-                            ),
-                            ft.Text(f"Priority: {m_pri}", size=11, color=colors["text_muted"])
+                            StatusBadge(m_st, is_dark=is_dark),
+                            PriorityBadge(m_pri, is_dark=is_dark)
                         ],
                         spacing=8,
                         wrap=True
@@ -811,9 +843,11 @@ class StaffView:
 
         if not group_cards:
             group_cards.append(
-                ft.Container(
-                    content=ft.Text("No active Issue Groups in your departmental scope.", size=14, color=colors["text_muted"]),
-                    padding=40
+                EmptyState(
+                    "No issue groups",
+                    "Similar complaints will appear together here while each member keeps its own status.",
+                    icon=ft.Icons.DYNAMIC_FEED_OUTLINED,
+                    is_dark=is_dark,
                 )
             )
 
@@ -868,7 +902,7 @@ class StaffView:
             # Not registered yet: DO NOT guess academic year from roll number
             return ("NOT_REGISTERED", "Not Registered", colors["text_muted"], ft.Colors.TRANSPARENT)
 
-        single_roll_field = ft.TextField(
+        single_roll_field = ft.TextField(**get_input_style(is_dark),
             label="Add Single Roll Number",
             hint_text="e.g. 240101030",
             dense=True,
@@ -879,7 +913,7 @@ class StaffView:
         add_btn = ft.ElevatedButton(
             content=ft.Text("Add Roll Number"),
             icon=ft.Icons.ADD,
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
 
         def add_single(e):
@@ -917,7 +951,7 @@ class StaffView:
             def handle_click(e):
                 from ui.views.account_view import generate_secure_temporary_password
                 unique_temp_pw = generate_secure_temporary_password()
-                new_pw_field = ft.TextField(
+                new_pw_field = ft.TextField(**get_input_style(is_dark),
                     label="Temporary Password",
                     value=unique_temp_pw,
                     password=False,
@@ -1026,7 +1060,7 @@ class StaffView:
             width=210
         )
 
-        search_filter = ft.TextField(
+        search_filter = ft.TextField(**get_input_style(is_dark),
             hint_text="Search roll number or student...",
             prefix_icon=ft.Icons.SEARCH,
             dense=True
@@ -1488,7 +1522,7 @@ class StaffView:
             "Import File",
             icon=ft.Icons.UPLOAD_FILE,
             disabled=True,
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
         import_summary_container = ft.Column(spacing=6, visible=False)
 
@@ -1802,7 +1836,7 @@ class StaffView:
                                 ft.ElevatedButton(
                                     content=ft.Text("Import Modal"),
                                     icon=ft.Icons.UPLOAD_FILE,
-                                    style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
+                                    style=get_button_style(is_dark),
                                     on_click=lambda _: show_excel_importer_dialog(
                                         self.page,
                                         self.role,
@@ -1869,7 +1903,7 @@ class StaffView:
                 self._switch_view(1)
 
             def deny_dialog(ev, r_id=rid):
-                reason_field = ft.TextField(
+                reason_field = ft.TextField(**get_input_style(is_dark),
                     label="Denial Reason (Mandatory)",
                     hint_text="Specify reason for denying accommodation...",
                     dense=True,
@@ -1922,7 +1956,7 @@ class StaffView:
                             reason_field,
                             err_text
                         ], spacing=8, tight=True),
-                        width=420
+                        width=420 if get_responsive_layout(getattr(self.page, "width", None)) == "desktop" else None
                     ),
                     bgcolor=colors["surface"],
                     actions=[
@@ -2135,17 +2169,17 @@ class StaffView:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        old_hod_code = ft.TextField(label="Current HOD Security Code", password=True, can_reveal_password=True, dense=True)
-        new_hod_code = ft.TextField(label="New HOD Security Code", password=True, can_reveal_password=True, dense=True)
-        new_coord_code = ft.TextField(label="New Coordinator Security Code for Your Department", password=True, can_reveal_password=True, dense=True)
+        old_hod_code = ft.TextField(**get_input_style(is_dark), label="Current HOD Security Code", password=True, can_reveal_password=True, dense=True)
+        new_hod_code = ft.TextField(**get_input_style(is_dark), label="New HOD Security Code", password=True, can_reveal_password=True, dense=True)
+        new_coord_code = ft.TextField(**get_input_style(is_dark), label="New Coordinator Security Code for Your Department", password=True, can_reveal_password=True, dense=True)
 
         update_hod_btn = ft.ElevatedButton(
             content=ft.Text("Update HOD Code"),
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
         update_coord_btn = ft.ElevatedButton(
             content=ft.Text("Update Coordinator Code"),
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
 
         def save_hod_code(e):
@@ -2224,12 +2258,12 @@ class StaffView:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        old_code = ft.TextField(label="Current Hostel Incharge Security Code", password=True, can_reveal_password=True, dense=True)
-        new_code = ft.TextField(label="New Hostel Incharge Security Code", password=True, can_reveal_password=True, dense=True)
+        old_code = ft.TextField(**get_input_style(is_dark), label="Current Hostel Incharge Security Code", password=True, can_reveal_password=True, dense=True)
+        new_code = ft.TextField(**get_input_style(is_dark), label="New Hostel Incharge Security Code", password=True, can_reveal_password=True, dense=True)
 
         update_btn = ft.ElevatedButton(
             content=ft.Text("Update Code"),
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
 
         def save_hostel_code(e):
@@ -2281,12 +2315,12 @@ class StaffView:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        old_code = ft.TextField(label="Current General Dept HOD Security Code", password=True, can_reveal_password=True, dense=True)
-        new_code = ft.TextField(label="New General Dept HOD Security Code", password=True, can_reveal_password=True, dense=True)
+        old_code = ft.TextField(**get_input_style(is_dark), label="Current General Dept HOD Security Code", password=True, can_reveal_password=True, dense=True)
+        new_code = ft.TextField(**get_input_style(is_dark), label="New General Dept HOD Security Code", password=True, can_reveal_password=True, dense=True)
 
         update_btn = ft.ElevatedButton(
             content=ft.Text("Update Security Code"),
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
 
         def save_gen_code(e):
@@ -2340,12 +2374,12 @@ class StaffView:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        old_code = ft.TextField(label="Current Library Incharge Security Code", password=True, can_reveal_password=True, dense=True)
-        new_code = ft.TextField(label="New Library Incharge Security Code", password=True, can_reveal_password=True, dense=True)
+        old_code = ft.TextField(**get_input_style(is_dark), label="Current Library Incharge Security Code", password=True, can_reveal_password=True, dense=True)
+        new_code = ft.TextField(**get_input_style(is_dark), label="New Library Incharge Security Code", password=True, can_reveal_password=True, dense=True)
 
         update_btn = ft.ElevatedButton(
             content=ft.Text("Update Security Code"),
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
 
         def save_lib_code(e):
@@ -2416,12 +2450,12 @@ class StaffView:
             dense=True
         )
         target_dept = ft.Dropdown(label="Department (for HOD/Coordinator)", options=dept_options, dense=True, value=dept_options[0].key if dept_options else None)
-        new_code_field = ft.TextField(label="New Security Code", password=True, can_reveal_password=True, dense=True)
+        new_code_field = ft.TextField(**get_input_style(is_dark), label="New Security Code", password=True, can_reveal_password=True, dense=True)
 
         reset_btn = ft.ElevatedButton(
             content=ft.Text("Execute Administrative Reset"),
             icon=ft.Icons.LOCK_RESET,
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
 
         def do_admin_reset(e):
@@ -2483,11 +2517,11 @@ class StaffView:
         client = get_supabase_client()
         locations = client.table("locations").select("*").order("name").execute().data or []
 
-        new_loc_field = ft.TextField(label="Add New Campus Location", dense=True, width=280)
+        new_loc_field = ft.TextField(**get_input_style(is_dark), label="Add New Campus Location", dense=True, expand=True)
         add_loc_btn = ft.ElevatedButton(
             content=ft.Text("Add Location"),
             icon=ft.Icons.ADD,
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark)
         )
 
         def add_loc(e):
