@@ -83,7 +83,7 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                                     "A Cleaner, Safer and Better Campus Together",
                                     size=12,
                                     italic=True,
-                                    color=colors["primary_light"],
+                                    color="#DCE9FA" if not is_dark else colors["primary_light"],
                                     weight=ft.FontWeight.W_500
                                 ),
                                 ft.Container(
@@ -148,7 +148,7 @@ def create_login_hero_panel(is_staff: bool = False, is_dark: bool = False, compa
                                 "A Cleaner, Safer and Better Campus Together",
                                 size=18,
                                 italic=True,
-                                color=colors["primary_light"],
+                                color="#DCE9FA" if not is_dark else colors["primary_light"],
                                 weight=ft.FontWeight.W_500
                             ),
                             ft.Container(height=8),

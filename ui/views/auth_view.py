@@ -694,10 +694,10 @@ class AuthView:
                         wrap=True
                     )
                 ],
-                spacing=SPACING["md"],
+                spacing=SPACING["sm"] if is_compact else SPACING["md"],
                 scroll=ft.ScrollMode.AUTO
             ),
-            padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["xl"])
+            padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"] if is_compact else SPACING["xl"])
         )
 
         tab2_content = ft.Container(
@@ -898,7 +898,12 @@ class AuthView:
                 spacing=10,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER
             ),
-            padding=ft.padding.only(left=SPACING["lg"], right=SPACING["lg"], top=SPACING["lg"], bottom=SPACING["sm"])
+            padding=ft.padding.only(
+                left=SPACING["lg"],
+                right=SPACING["lg"],
+                top=SPACING["sm"] if is_compact else SPACING["lg"],
+                bottom=SPACING["xs"] if is_compact else SPACING["sm"]
+            )
         )
 
         auth_height = DIALOG_MAX_HEIGHT - SPACING["3xl"]
