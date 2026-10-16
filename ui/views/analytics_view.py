@@ -218,7 +218,6 @@ class AnalyticsView:
                                     )
                                 ],
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                wrap=True
                             ),
                             ft.Row(
                                 controls=[
@@ -336,7 +335,6 @@ class AnalyticsView:
                     ft.Text("Average resolution time", color=colors["text_muted"], expand=True),
                     ft.Text(f"{average_resolution:.1f} hours", color=colors["text"], weight=ft.FontWeight.BOLD),
                 ],
-                wrap=True,
                 spacing=SPACING["sm"],
             ),
             padding=SPACING["md"],

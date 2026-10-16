@@ -749,15 +749,21 @@ class StaffView:
                 ft.Row(
                     controls=[
                         ft.Text("Grievance Management", size=22, weight=ft.FontWeight.BOLD, color=colors["text"], expand=True),
-                        filter_toggle,
-                        ft.IconButton(
-                            icon=ft.Icons.REFRESH,
-                            tooltip="Refresh from Server",
-                            on_click=lambda _: refresh_list(force_reload=True)
-                        )
+                        ft.Row(
+                            controls=[
+                                filter_toggle,
+                                ft.IconButton(
+                                    icon=ft.Icons.REFRESH,
+                                    tooltip="Refresh from Server",
+                                    on_click=lambda _: refresh_list(force_reload=True)
+                                ),
+                            ],
+                            tight=True,
+                            spacing=SPACING["xs"],
+                        ),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    wrap=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 filter_panel,
                 ft.Divider(color=colors["border"]),

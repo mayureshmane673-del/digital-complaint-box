@@ -541,7 +541,7 @@ class AccountView:
                             ft.Row(
                                 controls=[
                                     ft.Container(ft.Text(status_text, style=get_text_style("caption", is_dark, color=st_color, weight=ft.FontWeight.BOLD)), bgcolor=ft.Colors.with_opacity(0.12, st_color), border_radius=RADII["pill"], padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["xs"])),
-                                    ft.Text(f"Registered {created_at or '—'}", style=get_text_style("caption", is_dark), expand=True),
+                                    ft.Text(f"Registered {created_at or '—'}", style=get_text_style("caption", is_dark)),
                                 ],
                                 wrap=True,
                                 spacing=SPACING["sm"],
@@ -741,7 +741,7 @@ class AccountView:
                             ft.Row(
                                 controls=[
                                     ft.Container(ft.Text(status_text, style=get_text_style("caption", is_dark, color=st_color, weight=ft.FontWeight.BOLD)), bgcolor=ft.Colors.with_opacity(0.12, st_color), border_radius=RADII["pill"], padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["xs"])),
-                                    ft.Text(f"Registered {created_at or '—'}", style=get_text_style("caption", is_dark), expand=True),
+                                    ft.Text(f"Registered {created_at or '—'}", style=get_text_style("caption", is_dark)),
                                 ],
                                 wrap=True,
                                 spacing=SPACING["sm"],

@@ -173,7 +173,6 @@ def show_excel_importer_dialog(
                         alignment=ft.MainAxisAlignment.START,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=12,
-                        wrap=True
                     ),
                     import_btn,
                     ft.Divider(color=colors["border"]),
