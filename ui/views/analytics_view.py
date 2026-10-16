@@ -7,7 +7,11 @@ import logging
 import time
 import flet as ft
 from services.analytics_service import AnalyticsService
-from ui.theme import get_theme_colors, get_card_shadow
+from ui.theme import (
+    get_theme_colors, get_card_shadow, get_responsive_layout, SectionHeader,
+    PageContainer, EmptyState, SPACING, RADII,
+)
+from ui.components.stat_card import create_stat_card
 from ui.state import AppState
 from models.user import UserRole
 
@@ -23,14 +27,15 @@ class AnalyticsView:
 
     def render(self) -> ft.Control:
         colors = get_theme_colors(AppState.is_dark_mode)
-        holder = ft.Container(
+        holder = PageContainer(
             content=ft.Row(
                 controls=[ft.ProgressRing(width=22, height=22, stroke_width=2, color=colors["primary"]), ft.Text("Loading analytics and feedback…", color=colors["text_muted"])],
                 alignment=ft.MainAxisAlignment.CENTER,
                 spacing=10,
             ),
+            padding=SPACING["lg"],
+            is_dark=AppState.is_dark_mode,
             expand=True,
-            alignment=ft.Alignment.CENTER,
         )
         self._load_into(holder)
         return holder
@@ -159,7 +164,9 @@ class AnalyticsView:
             rows=rows
         )
 
-        is_mobile = (getattr(self.page, "width", None) or 1200) < 768
+        viewport_width = getattr(self.page, "width", None)
+        layout = get_responsive_layout(viewport_width if isinstance(viewport_width, (int, float)) else None)
+        is_mobile = layout != "desktop"
 
         scrollable_table = ft.Container(
             content=ft.Row(
@@ -211,7 +218,6 @@ class AnalyticsView:
                                     )
                                 ],
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                wrap=True
                             ),
                             ft.Row(
                                 controls=[
@@ -258,17 +264,11 @@ class AnalyticsView:
 
         if not feedback_cards:
             feedback_cards.append(
-                ft.Container(
-                    content=ft.Row(
-                        controls=[
-                            ft.Icon(ft.Icons.RATE_REVIEW_OUTLINED, size=24, color=colors["text_muted"]),
-                            ft.Text("No student feedback submitted yet for your department.", size=13, color=colors["text_muted"], italic=True)
-                        ],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        spacing=8
-                    ),
-                    padding=ft.padding.symmetric(vertical=20, horizontal=16),
-                    alignment=ft.Alignment(0, 0)
+                EmptyState(
+                    "No feedback yet",
+                    "Student feedback will appear here after resolved complaints are rated.",
+                    icon=ft.Icons.RATE_REVIEW_OUTLINED,
+                    is_dark=is_dark,
                 )
             )
 
@@ -307,17 +307,68 @@ class AnalyticsView:
             margin=ft.margin.only(top=8)
         )
 
-        return ft.Column(
+        total_complaints = sum(int(d.get("total") or 0) for d in dept_breakdown)
+        total_resolved = sum(int(d.get("resolved") or 0) for d in dept_breakdown)
+        total_pending = sum(int(d.get("pending") or 0) for d in dept_breakdown)
+        average_resolution = (
+            sum(float(d.get("avg_resolution_hours") or 0) for d in dept_breakdown) / len(dept_breakdown)
+            if dept_breakdown else 0
+        )
+        average_satisfaction = (
+            sum(float(d.get("satisfaction_rate") or 0) for d in dept_breakdown) / len(dept_breakdown)
+            if dept_breakdown else 0
+        )
+        summary_cards = ft.ResponsiveRow(
             controls=[
-                ft.Text("Academic Department Performance Comparison", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                ft.Text("Real-time comparative resolution metrics across CSE, AIDS, E&TC, MECH, and Civil departments.", size=13, color=colors["text_muted"]),
-                ft.Divider(color=colors["border"]),
-                scrollable_table,
-                mobile_cards_col,
-                feedback_section
+                create_stat_card("Total complaints", str(total_complaints), ft.Icons.FOLDER_OUTLINED, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 3}),
+                create_stat_card("Resolved", str(total_resolved), ft.Icons.TASK_ALT, colors["success"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 3}),
+                create_stat_card("Pending", str(total_pending), ft.Icons.HOURGLASS_TOP, colors["warning"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 3}),
+                create_stat_card("Avg. satisfaction", f"{average_satisfaction:.1f}%", ft.Icons.THUMB_UP_ALT, colors["secondary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 3}),
             ],
-            scroll=ft.ScrollMode.AUTO,
-            spacing=16,
-            expand=True
+            spacing=SPACING["md"],
+            run_spacing=SPACING["md"],
+        )
+        metrics_strip = ft.Container(
+            content=ft.Row(
+                controls=[
+                    ft.Icon(ft.Icons.SCHEDULE, color=colors["primary"]),
+                    ft.Text("Average resolution time", color=colors["text_muted"], expand=True),
+                    ft.Text(f"{average_resolution:.1f} hours", color=colors["text"], weight=ft.FontWeight.BOLD),
+                ],
+                spacing=SPACING["sm"],
+            ),
+            padding=SPACING["md"],
+            bgcolor=colors["surface"],
+            border=ft.Border.all(1, colors["border"]),
+            border_radius=RADII["md"],
+        )
+        return PageContainer(
+            content=ft.Column(
+                controls=[
+                    SectionHeader(
+                        "Department performance",
+                        "Complaint resolution and satisfaction across departments.",
+                        icon=ft.Icons.INSIGHTS,
+                        is_dark=is_dark,
+                    ),
+                    summary_cards,
+                    metrics_strip,
+                    SectionHeader(
+                        "Department comparison",
+                        "Resolution counts, urgency, response time and satisfaction.",
+                        icon=ft.Icons.BUSINESS,
+                        is_dark=is_dark,
+                    ),
+                    scrollable_table,
+                    mobile_cards_col,
+                    feedback_section
+                ],
+                scroll=ft.ScrollMode.AUTO,
+                spacing=SPACING["lg"],
+                expand=True,
+            ),
+            padding=SPACING["lg"],
+            is_dark=is_dark,
+            expand=True,
         )
 

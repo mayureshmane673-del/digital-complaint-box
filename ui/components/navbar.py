@@ -5,8 +5,8 @@ ui/components/navbar.py: Role-aware navigation sidebar and responsive top app ba
 from typing import Callable, Optional
 import flet as ft
 from ui.theme import (
-    COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_SURFACE, COLOR_BORDER,
-    COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, get_theme_colors
+    COLOR_DANGER, get_theme_colors, get_text_style,
+    RADII, SPACING
 )
 from ui.state import AppState
 from models.user import UserRole
@@ -32,8 +32,8 @@ def create_app_bar(
     badge_text = ft.Text(str(unread_count), size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
     badge_container = ft.Container(
         content=badge_text,
-        bgcolor="#ef4444",
-        border_radius=10,
+        bgcolor=COLOR_DANGER,
+        border_radius=RADII["pill"],
         padding=ft.padding.symmetric(horizontal=5, vertical=1),
         top=6,
         right=6,
@@ -69,8 +69,64 @@ def create_app_bar(
 
     is_compact = bool(isinstance(getattr(page, "width", None), (int, float)) and page.width < 768)
 
+    user_menu_content = ft.Row(
+        controls=[
+            ft.CircleAvatar(
+                content=ft.Text(
+                    user_name[:1].upper() if user_name else "U",
+                    color=colors["primary"],
+                    weight=ft.FontWeight.BOLD,
+                    size=11 if is_compact else 13,
+                ),
+                bgcolor=colors["surface_variant"],
+                radius=12 if is_compact else 15,
+            ),
+            *([] if is_compact else [
+                ft.Column(
+                    controls=[
+                        ft.Text(user_name or "User", style=get_text_style("label", is_dark)),
+                        ft.Text(role_badge_text, style=get_text_style("caption", is_dark)),
+                    ],
+                    spacing=0,
+                    tight=True,
+                    horizontal_alignment=ft.CrossAxisAlignment.START,
+                ),
+                ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=18, color=colors["text_muted"]),
+            ]),
+        ],
+        spacing=SPACING["sm"],
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+    user_menu = ft.PopupMenuButton(
+        content=user_menu_content,
+        bgcolor=colors["surface"],
+        shape=ft.RoundedRectangleBorder(radius=RADII["md"]),
+        items=[
+            ft.PopupMenuItem(
+                content=ft.Column(
+                    controls=[
+                        ft.Text(user_name or "User", weight=ft.FontWeight.BOLD, color=colors["text"]),
+                        ft.Text(role_badge_text, size=12, color=colors["text_muted"]),
+                    ],
+                    spacing=2,
+                    tight=True,
+                ),
+            ),
+            ft.PopupMenuItem(
+                content=ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.LOGOUT, size=18, color=colors["text_muted"]),
+                        ft.Text("Log out", color=colors["text"]),
+                    ],
+                    spacing=SPACING["sm"],
+                ),
+                on_click=lambda _: on_logout(),
+            ),
+        ],
+    )
+
     return ft.AppBar(
-        leading=ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=ft.Colors.WHITE, size=22),
+        leading=ft.Icon(ft.Icons.ACCOUNT_BALANCE, color=colors["primary"], size=22),
         leading_width=36 if is_compact else 40,
         title=ft.Row(
             controls=[
@@ -78,14 +134,14 @@ def create_app_bar(
                     "Complaint Box" if is_compact else "Digital Complaint Box",
                     size=15 if is_compact else 17,
                     weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.WHITE
+                    color=colors["text"]
                 ),
                 *(
                     [
                         ft.Container(
-                            content=ft.Text(role_badge_text, size=11, weight=ft.FontWeight.W_600, color="#1e3a8a"),
-                            bgcolor="#dbeafe",
-                            border_radius=12,
+                            content=ft.Text(role_badge_text, size=11, weight=ft.FontWeight.W_600, color=colors["primary"]),
+                            bgcolor=ft.Colors.with_opacity(0.12, colors["primary"]),
+                            border_radius=RADII["pill"],
                             padding=ft.padding.symmetric(horizontal=8, vertical=2)
                         )
                     ] if not is_compact else []
@@ -94,12 +150,15 @@ def create_app_bar(
             spacing=6 if is_compact else 8,
             vertical_alignment=ft.CrossAxisAlignment.CENTER
         ),
-        bgcolor=COLOR_PRIMARY,
+        bgcolor=colors["surface"],
+        color=colors["text"],
+        elevation=0,
+        shadow_color=ft.Colors.with_opacity(0.06, colors["text"]),
         actions=[
             # Dark Mode Toggle Button
             ft.IconButton(
                 icon=ft.Icons.LIGHT_MODE if is_dark else ft.Icons.DARK_MODE,
-                icon_color=ft.Colors.WHITE,
+                icon_color=colors["text_muted"],
                 icon_size=18 if is_compact else 20,
                 tooltip="Switch to Light Mode" if is_dark else "Switch to Dark Mode",
                 on_click=lambda _: AppState.toggle_dark_mode()
@@ -109,7 +168,7 @@ def create_app_bar(
                 controls=[
                     ft.IconButton(
                         icon=ft.Icons.NOTIFICATIONS_OUTLINED,
-                        icon_color=ft.Colors.WHITE,
+                        icon_color=colors["text_muted"],
                         icon_size=18 if is_compact else 20,
                         tooltip="Notification Center",
                         on_click=open_notifications
@@ -117,30 +176,8 @@ def create_app_bar(
                     badge_container
                 ]
             ),
-            ft.Row(
-                controls=[
-                    ft.CircleAvatar(
-                        content=ft.Text(
-                            user_name[:1].upper() if user_name else "U",
-                            color=COLOR_PRIMARY,
-                            weight=ft.FontWeight.BOLD,
-                            size=11 if is_compact else 13
-                        ),
-                        bgcolor="#e2e8f0",
-                        radius=12 if is_compact else 15
-                    ),
-                    *( [ft.Text(user_name, size=12, weight=ft.FontWeight.W_500, color=ft.Colors.WHITE)] if not is_compact else [] )
-                ],
-                spacing=4 if is_compact else 6
-            ),
-            ft.IconButton(
-                icon=ft.Icons.LOGOUT,
-                icon_color=ft.Colors.WHITE,
-                icon_size=18 if is_compact else 20,
-                tooltip="Log Out",
-                on_click=lambda _: on_logout()
-            ),
-            ft.Container(width=2 if is_compact else 4)
+            user_menu,
+            ft.Container(width=SPACING["xs"])
         ]
     )
 
@@ -229,7 +266,11 @@ def create_navigation_rail(
         min_extended_width=180,
         destinations=destinations,
         on_change=lambda e: on_destination_selected(e.control.selected_index),
-        bgcolor=colors["surface"]
+        bgcolor=colors["surface"],
+        indicator_color=ft.Colors.with_opacity(0.14, colors["primary"]),
+        selected_label_text_style=get_text_style("caption", is_dark, color=colors["primary"], weight=ft.FontWeight.W_600),
+        unselected_label_text_style=get_text_style("caption", is_dark, color=colors["text_muted"]),
+        use_indicator=True,
     )
 
 
@@ -239,6 +280,8 @@ def create_bottom_nav_bar(
     on_destination_selected: Callable[[int], None]
 ) -> ft.NavigationBar:
     """Builds role-specific bottom navigation bar for mobile screens (Image 3)."""
+    is_dark = AppState.is_dark_mode
+    colors = get_theme_colors(is_dark)
     destinations = []
     if role == UserRole.STUDENT.value:
         destinations = [
@@ -273,5 +316,11 @@ def create_bottom_nav_bar(
     return ft.NavigationBar(
         destinations=destinations,
         selected_index=safe_index,
-        on_change=lambda e: on_destination_selected(e.control.selected_index)
+        on_change=lambda e: on_destination_selected(e.control.selected_index),
+        bgcolor=colors["surface"],
+        indicator_color=ft.Colors.with_opacity(0.14, colors["primary"]),
+        elevation=0,
+        border=ft.Border.only(top=ft.BorderSide(1, colors["border"])),
+        label_behavior=ft.NavigationBarLabelBehavior.ONLY_SHOW_SELECTED,
+        animation_duration=220,
     )

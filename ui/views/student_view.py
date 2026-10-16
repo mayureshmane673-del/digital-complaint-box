@@ -22,7 +22,10 @@ from services.analytics_service import AnalyticsService
 from database.supabase_client import get_supabase_client, get_trusted_backend_client
 from ui.theme import (
     COLOR_PRIMARY, COLOR_SURFACE, COLOR_BORDER, COLOR_TEXT_PRIMARY,
-    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow
+    COLOR_TEXT_MUTED, STATUS_COLORS, PRIORITY_COLORS, get_theme_colors, get_card_shadow,
+    get_responsive_layout, get_text_style, get_button_style, get_input_style,
+    SectionHeader, EmptyState, PageContainer, StatusBadge,
+    SPACING, RADII, MOTION_NORMAL_MS
 )
 from ui.state import AppState
 from ui.components.college_hero import create_dashboard_welcome_banner
@@ -74,6 +77,11 @@ class StudentView:
         self.roll_number = student["roll_number"]
         self.department_id = student["department_id"]
         self.selected_tab_index = initial_tab
+        try:
+            if hasattr(self.page, "session") and self.page.session and hasattr(self.page.session, "store") and self.page.session.store:
+                self.page.session.store.set("active_tab_index", initial_tab)
+        except Exception:
+            pass
         self.cached_complaints = None
         self._dashboard_loading = False
         self._dashboard_error: Optional[str] = None
@@ -98,6 +106,13 @@ class StudentView:
             self._tab_cache.clear()
         else:
             self._tab_cache.pop(index, None)
+
+    def _viewport_width(self) -> Optional[float]:
+        width = getattr(self.page, "width", None)
+        return width if isinstance(width, (int, float)) else None
+
+    def _viewport_layout(self) -> str:
+        return get_responsive_layout(self._viewport_width())
 
     def _load_complaints(self, force: bool = False) -> List[Dict[str, Any]]:
         """Single-flight complaint fetch shared by dashboard and complaint list."""
@@ -279,11 +294,62 @@ class StudentView:
     # -------------------------------------------------------------------------
     # TAB 0: DASHBOARD
     # -------------------------------------------------------------------------
+    def _student_hostel_summary_card(self, colors: Dict[str, Any], is_dark: bool) -> ft.Control:
+        """Show the hostel approval state already present on the student profile."""
+        approved = bool(self.student.get("is_hostel_approved", False))
+        status_text = "Approved resident" if approved else "Request or review access"
+        status_color = colors["success"] if approved else colors["primary"]
+        return ft.Container(
+            content=ft.Row(
+                controls=[
+                    ft.Container(
+                        content=ft.Icon(ft.Icons.HOTEL, color=status_color, size=22),
+                        bgcolor=ft.Colors.with_opacity(0.10, status_color),
+                        border_radius=RADII["md"],
+                        padding=SPACING["md"],
+                    ),
+                    ft.Column(
+                        controls=[
+                            ft.Text("Hostel request", style=get_text_style("label", is_dark)),
+                            ft.Row(
+                                controls=[
+                                    ft.Container(
+                                        content=ft.Text(status_text, style=get_text_style("body_small", is_dark, color=status_color)),
+                                        bgcolor=ft.Colors.with_opacity(0.10, status_color),
+                                        border_radius=RADII["pill"],
+                                        padding=ft.padding.symmetric(horizontal=SPACING["sm"], vertical=SPACING["xs"]),
+                                    )
+                                ],
+                                spacing=8,
+                            ),
+                        ],
+                        spacing=4,
+                        expand=True,
+                    ),
+                    ft.TextButton(
+                        "View status",
+                        icon=ft.Icons.ARROW_FORWARD,
+                        on_click=lambda _: self._switch_view(4),
+                        style=get_button_style(is_dark, "text", "sm"),
+                    ),
+                ],
+                spacing=SPACING["md"],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            bgcolor=colors["surface"],
+            border=ft.Border.all(1, colors["border"]),
+            border_radius=RADII["lg"],
+            padding=SPACING["lg"],
+            shadow=get_card_shadow(is_dark),
+            animate=MOTION_NORMAL_MS,
+        )
+
     def _render_dashboard(self) -> ft.Control:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
-        is_compact = bool(isinstance(getattr(self.page, "width", None), (int, float)) and self.page.width < 768)
+        viewport = self._viewport_layout()
+        is_compact = viewport != "desktop"
         dept_display = AppState.department_name or AppState.department_code or ""
         welcome_banner = create_dashboard_welcome_banner(
             user_name=self.student.get('full_name', 'Student'),
@@ -315,11 +381,11 @@ class StudentView:
         if self.cached_complaints is None:
             stats_row = ft.ResponsiveRow(
                 controls=[
-                    create_stat_card("Total Submitted", "—", ft.Icons.FOLDER_SPECIAL, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-                    create_stat_card("Pending Review", "—", ft.Icons.HOURGLASS_EMPTY, "#d97706", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-                    create_stat_card("In Progress", "—", ft.Icons.AUTORENEW, "#2563eb", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-                    create_stat_card("Resolved", "—", ft.Icons.CHECK_CIRCLE, "#059669", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-                    create_stat_card("Rejected", "—", ft.Icons.CANCEL, "#dc2626", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2})
+                    create_stat_card("Total Submitted", "—", ft.Icons.FOLDER_SPECIAL, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 6, "xl": 3}),
+                    create_stat_card("Pending Review", "—", ft.Icons.HOURGLASS_EMPTY, "#d97706", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 6, "xl": 3}),
+                    create_stat_card("In Progress", "—", ft.Icons.AUTORENEW, "#2563eb", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 6, "xl": 3}),
+                    create_stat_card("Resolved", "—", ft.Icons.CHECK_CIRCLE, "#059669", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 6, "xl": 3}),
+                    create_stat_card("Rejected", "—", ft.Icons.CANCEL, "#dc2626", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 6, "xl": 3})
                 ],
                 spacing=12,
                 run_spacing=12
@@ -382,7 +448,7 @@ class StudentView:
                         ft.Icon(ft.Icons.ERROR_OUTLINE, color="#dc2626"),
                         ft.Text(self._dashboard_error, size=13, color=colors["text_muted"], expand=True),
                         ft.ElevatedButton("Retry", icon=ft.Icons.REFRESH, on_click=retry_dashboard),
-                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=10, wrap=True),
+                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
                     padding=24,
                     border_radius=12,
                     bgcolor=colors.get("card_bg", colors.get("surface", "#ffffff")),
@@ -400,10 +466,11 @@ class StudentView:
                     border=ft.border.all(1, colors.get("border", "#e2e8f0"))
                 )
 
-            return ft.Column(
+            return PageContainer(ft.Column(
                 controls=[
                     welcome_banner,
                     stats_row,
+                    self._student_hostel_summary_card(colors, is_dark),
                     charts_row,
                     ft.Divider(color=colors["border"]),
                     recent_header,
@@ -412,7 +479,7 @@ class StudentView:
                 scroll=ft.ScrollMode.AUTO,
                 spacing=16,
                 expand=True
-            )
+            ), padding=SPACING["md"] if viewport == "mobile" else SPACING["lg"], is_dark=is_dark)
 
         # Full Dashboard when data is ready
         complaints = self.cached_complaints
@@ -425,11 +492,11 @@ class StudentView:
         # Stat cards
         stats_row = ft.ResponsiveRow(
             controls=[
-                create_stat_card("Total Submitted", str(total), ft.Icons.FOLDER_SPECIAL, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-                create_stat_card("Pending Review", str(pending), ft.Icons.HOURGLASS_EMPTY, "#d97706", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-                create_stat_card("In Progress", str(in_prog), ft.Icons.AUTORENEW, "#2563eb", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-                create_stat_card("Resolved", str(resolved), ft.Icons.CHECK_CIRCLE, "#059669", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2}),
-                create_stat_card("Rejected", str(rejected), ft.Icons.CANCEL, "#dc2626", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 4, "lg": 2})
+                create_stat_card("Total Submitted", str(total), ft.Icons.FOLDER_SPECIAL, colors["primary"], is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 6, "xl": 3}),
+                create_stat_card("Pending Review", str(pending), ft.Icons.HOURGLASS_EMPTY, "#d97706", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 6, "xl": 3}),
+                create_stat_card("In Progress", str(in_prog), ft.Icons.AUTORENEW, "#2563eb", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 6, "xl": 3}),
+                create_stat_card("Resolved", str(resolved), ft.Icons.CHECK_CIRCLE, "#059669", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 6, "xl": 3}),
+                create_stat_card("Rejected", str(rejected), ft.Icons.CANCEL, "#dc2626", is_dark=is_dark, col={"xs": 12, "sm": 6, "md": 6, "xl": 3})
             ],
             spacing=12,
             run_spacing=12
@@ -467,29 +534,24 @@ class StudentView:
             recent_cards.append(create_complaint_card(c, self._open_detail_dialog))
 
         if not recent_cards:
-            recent_cards.append(
-                ft.Container(
-                    content=ft.Column(
-                        controls=[
-                            ft.Icon(ft.Icons.MARK_EMAIL_READ_OUTLINED, size=48, color=colors["text_muted"]),
-                            ft.Text("No complaints registered yet.", size=14, color=colors["text_muted"]),
-                            ft.ElevatedButton(
-                                content=ft.Text("Register First Complaint"),
-                                icon=ft.Icons.ADD,
-                                style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
-                                on_click=lambda _: self._switch_view(1)
-                            )
-                        ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER
-                    ),
-                    padding=32
-                )
-            )
+            recent_cards.append(EmptyState(
+                "No complaints yet",
+                "Report an issue and follow its progress here.",
+                icon=ft.Icons.MARK_EMAIL_READ_OUTLINED,
+                action=ft.ElevatedButton(
+                    "Register First Complaint",
+                    icon=ft.Icons.ADD,
+                    style=get_button_style(is_dark),
+                    on_click=lambda _: self._switch_view(1),
+                ),
+                is_dark=is_dark,
+            ))
 
-        return ft.Column(
+        return PageContainer(ft.Column(
             controls=[
                 welcome_banner,
                 stats_row,
+                self._student_hostel_summary_card(colors, is_dark),
                 charts_row,
                 ft.Divider(color=colors["border"]),
                 recent_header,
@@ -498,7 +560,7 @@ class StudentView:
             scroll=ft.ScrollMode.AUTO,
             spacing=16,
             expand=True
-        )
+        ), padding=SPACING["md"] if viewport == "mobile" else SPACING["lg"], is_dark=is_dark)
 
     # -------------------------------------------------------------------------
     # TAB 1: NEW COMPLAINT WIZARD
@@ -520,6 +582,24 @@ class StudentView:
         init_pri = draft.get("priority", "Low")
         init_anon = bool(draft.get("is_anonymous", False))
         init_hostel = bool(draft.get("is_hostel", False))
+        student_obj = AppState.current_user if (AppState.current_user and str(AppState.current_user.get("id")) == str(self.student_id)) else self.student
+        is_approved_hostel = bool(student_obj.get("is_hostel_approved", False))
+
+        def _is_hostel_cat(raw_cat):
+            if not raw_cat:
+                return False
+            raw_str = str(raw_cat).strip().lower()
+            if raw_str == "hostel":
+                return True
+            for c in self.categories:
+                if str(c.get("id", "")).strip().lower() == raw_str or str(c.get("name", "")).strip().lower() == raw_str:
+                    return str(c.get("name", "")).strip().lower() == "hostel"
+            return False
+
+        if not is_approved_hostel and _is_hostel_cat(init_cat):
+            init_cat = None
+            init_sub = None
+            init_hostel = False
 
         title_field = ft.TextField(
             label="Complaint Title",
@@ -578,7 +658,11 @@ class StudentView:
         desc_field.on_change = on_desc_change
         title_field.on_change = lambda e: save_draft_state()
 
-        cat_options = [ft.dropdown.Option(key=str(c["id"]), text=str(c["name"])) for c in self.categories]
+        cat_options = [
+            ft.dropdown.Option(key=str(c["id"]), text=str(c["name"]))
+            for c in self.categories
+            if is_approved_hostel or str(c.get("name", "")).strip().lower() != "hostel"
+        ]
 
         custom_cat_field = ft.TextField(
             label="Specify Custom Category / Subcategory (Compulsory)",
@@ -785,7 +869,7 @@ class StudentView:
         )
         anonymous_checkbox.on_change = lambda e: save_draft_state()
 
-        is_approved_hostel = self.student.get("is_hostel_approved", False)
+        is_approved_hostel = bool(student_obj.get("is_hostel_approved", False))
         hostel_checkbox = ft.Checkbox(
             label="Hostel-related Complaint",
             value=init_hostel if is_approved_hostel else False,
@@ -804,7 +888,15 @@ class StudentView:
         # app.py will call render_portal_view() which creates a new StudentView,
         # but session store persists the already-selected files.
 
-        files_display = ft.Column(spacing=4)
+        files_display = ft.Column(spacing=SPACING["sm"])
+        upload_progress_indicator = ft.Column(
+            controls=[
+                ft.ProgressBar(color=colors["primary"], bgcolor=colors["surface_variant"]),
+                ft.Text("Preparing attachment upload…", style=get_text_style("caption", is_dark)),
+            ],
+            spacing=SPACING["xs"],
+            visible=False,
+        )
 
         def _get_count() -> int:
             return len(_get_selected_files(self.page))
@@ -828,6 +920,7 @@ class StudentView:
             pending = _get_picker_pending(self.page)
             uploading = _get_upload_active(self.page) or bool(_get_upload_queue(self.page))
             attach_btn.disabled = (n >= 2) or pending or uploading
+            upload_progress_indicator.visible = uploading
             if pending:
                 attach_btn.content = ft.Text("Opening Picker...")
             elif uploading:
@@ -996,6 +1089,13 @@ class StudentView:
                     cat_name = str(c.get("name", ""))
                     break
 
+            student_obj = AppState.current_user if (AppState.current_user and str(AppState.current_user.get("id")) == str(self.student_id)) else self.student
+            if cat_name.strip().lower() == "hostel" and not bool(student_obj.get("is_hostel_approved", False)):
+                msg = "You must have an approved hostel residency status to submit hostel complaints."
+                show_alert(msg, is_error=True)
+                show_feedback_message(self.page, msg, is_error=True)
+                return
+
             subcat_ctrl = getattr(self, "subcategory_dropdown", None) or subcat_holder.content
             selected_subcat = subcat_ctrl.value if subcat_ctrl else None
             custom_cat_val = (custom_cat_field.value or "").strip()
@@ -1106,50 +1206,19 @@ class StudentView:
 
         submit_btn.on_click = submit_form
 
-        # Stepper Progress Header matching Image 3 Panel 3
-        stepper_header = ft.Container(
-            content=ft.Row(
-                controls=[
-                    ft.Container(
-                        content=ft.Row([
-                            ft.Container(content=ft.Text("1", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE), bgcolor=colors["primary"], border_radius=12, width=22, height=22, alignment=ft.Alignment.CENTER),
-                            ft.Text("Details", size=12, weight=ft.FontWeight.BOLD, color=colors["primary"])
-                        ], spacing=6),
-                        bgcolor=ft.Colors.with_opacity(0.08, colors["primary"]),
-                        border_radius=12,
-                        padding=ft.padding.symmetric(horizontal=8, vertical=4)
-                    ),
-                    ft.Icon(ft.Icons.CHEVRON_RIGHT, size=16, color=colors["border"]),
-                    ft.Container(
-                        content=ft.Row([
-                            ft.Container(content=ft.Text("2", size=11, weight=ft.FontWeight.BOLD, color=colors["text_muted"]), bgcolor=colors.get("surface_variant", "#e2e8f0"), border_radius=12, width=22, height=22, alignment=ft.Alignment.CENTER),
-                            ft.Text("Category", size=12, color=colors["text_muted"])
-                        ], spacing=6),
-                        padding=ft.padding.symmetric(horizontal=8, vertical=4)
-                    ),
-                    ft.Icon(ft.Icons.CHEVRON_RIGHT, size=16, color=colors["border"]),
-                    ft.Container(
-                        content=ft.Row([
-                            ft.Container(content=ft.Text("3", size=11, weight=ft.FontWeight.BOLD, color=colors["text_muted"]), bgcolor=colors.get("surface_variant", "#e2e8f0"), border_radius=12, width=22, height=22, alignment=ft.Alignment.CENTER),
-                            ft.Text("Attachments", size=12, color=colors["text_muted"])
-                        ], spacing=6),
-                        padding=ft.padding.symmetric(horizontal=8, vertical=4)
-                    ),
-                    ft.Icon(ft.Icons.CHEVRON_RIGHT, size=16, color=colors["border"]),
-                    ft.Container(
-                        content=ft.Row([
-                            ft.Container(content=ft.Text("4", size=11, weight=ft.FontWeight.BOLD, color=colors["text_muted"]), bgcolor=colors.get("surface_variant", "#e2e8f0"), border_radius=12, width=22, height=22, alignment=ft.Alignment.CENTER),
-                            ft.Text("Review", size=12, color=colors["text_muted"])
-                        ], spacing=6),
-                        padding=ft.padding.symmetric(horizontal=8, vertical=4)
-                    ),
-                ],
-                alignment=ft.MainAxisAlignment.START,
-                wrap=True,
-                spacing=4
-            ),
-            margin=ft.margin.only(bottom=4)
+        # Four focused form stages. The original controls and their callbacks
+        # remain attached; only their presentation is grouped by step.
+        wizard_step_names = ["Details", "Category", "Attachments", "Review"]
+        step_state = [0]
+        stepper_header = ft.Container(margin=ft.margin.only(bottom=SPACING["xs"]))
+        wizard_progress = ft.ProgressBar(
+            value=0.25,
+            color=colors["primary"],
+            bgcolor=colors["surface_variant"],
+            border_radius=RADII["pill"],
+            height=5,
         )
+        step_title = ft.Text("Step 1 of 4 · Details", style=get_text_style("label", is_dark))
 
         upload_dropzone = ft.Container(
             content=ft.Column(
@@ -1170,58 +1239,231 @@ class StudentView:
             on_click=on_pick_attachment
         )
 
+        def make_stepper_header(active_step: int) -> ft.Control:
+            is_mobile = (self._viewport_layout() == "mobile")
+            items: List[ft.Control] = []
+            for idx, name in enumerate(wizard_step_names):
+                active_or_done = idx <= active_step
+                is_current = (idx == active_step)
+                accent = colors["primary"] if active_or_done else colors["text_muted"]
+                show_label = not is_mobile or is_current
+
+                step_row_controls = [
+                    ft.Container(
+                        content=ft.Text(str(idx + 1), size=11, weight=ft.FontWeight.BOLD,
+                                        color=ft.Colors.WHITE if active_or_done else colors["text_muted"]),
+                        bgcolor=colors["primary"] if active_or_done else colors["surface_variant"],
+                        border_radius=RADII["pill"], width=24, height=24,
+                        alignment=ft.Alignment.CENTER,
+                    ),
+                ]
+                if show_label:
+                    step_row_controls.append(
+                        ft.Text(name, style=get_text_style("body_small", is_dark,
+                                                           color=accent,
+                                                           weight=ft.FontWeight.W_600 if is_current else ft.FontWeight.NORMAL))
+                    )
+
+                items.append(ft.Container(
+                    content=ft.Row(
+                        controls=step_row_controls,
+                        spacing=SPACING["xs"],
+                        tight=True,
+                    ),
+                    bgcolor=ft.Colors.with_opacity(0.08, colors["primary"]) if is_current else None,
+                    border_radius=RADII["pill"],
+                    padding=ft.padding.symmetric(horizontal=SPACING["sm"], vertical=SPACING["xs"]),
+                    animate=MOTION_NORMAL_MS,
+                ))
+                if idx < len(wizard_step_names) - 1:
+                    items.append(ft.Icon(ft.Icons.CHEVRON_RIGHT, size=14 if is_mobile else 16, color=colors["border"]))
+            return ft.Container(
+                content=ft.Row(controls=items, wrap=False, scroll=ft.ScrollMode.AUTO if is_mobile else None, spacing=SPACING["xs"]),
+                padding=ft.padding.symmetric(vertical=SPACING["xs"]),
+            )
+
+        # Apply the shared input styling to the existing fields without
+        # altering values, validators, or event handlers.
+        shared_input_style = get_input_style(is_dark)
+        for field in (title_field, desc_field, custom_cat_field, custom_loc_field):
+            for property_name, property_value in shared_input_style.items():
+                setattr(field, property_name, property_value)
+
+        privacy_panel = ft.Container(
+            content=ft.Column(
+                controls=[
+                    anonymous_checkbox,
+                    ft.Text(
+                        "When enabled, staff see the complaint details without your name, student ID, or roll number.",
+                        style=get_text_style("body_small", is_dark),
+                    ),
+                ],
+                spacing=SPACING["xs"],
+            ),
+            bgcolor=colors["surface_variant"],
+            border=ft.Border.all(1, colors["border"]),
+            border_radius=RADII["md"],
+            padding=SPACING["md"],
+        )
+
+        detail_header = SectionHeader(
+            "Describe the issue",
+            "Add a clear title and 10–1000 characters of detail.",
+            is_dark=is_dark,
+        )
+        hostel_panel = ft.Container(
+            content=ft.Column(controls=[hostel_checkbox, hostel_note], spacing=SPACING["xs"]),
+            bgcolor=colors["surface"],
+            border=ft.Border.all(1, colors["border"]),
+            border_radius=RADII["md"],
+            padding=SPACING["md"],
+        )
+        category_step = ft.Column(
+            controls=[
+                SectionHeader("Categorize the complaint", "Choose a department category, location, and urgency.", is_dark=is_dark),
+                ft.ResponsiveRow(controls=[
+                    ft.Container(category_dropdown, col={"xs": 12, "sm": 6}),
+                    self.subcat_holder,
+                ], spacing=SPACING["sm"], run_spacing=SPACING["sm"]),
+                custom_cat_field,
+                ft.ResponsiveRow(controls=[
+                    ft.Container(location_dropdown, col={"xs": 12, "sm": 6}),
+                    ft.Container(custom_loc_field, col={"xs": 12, "sm": 6}),
+                ], spacing=SPACING["sm"], run_spacing=SPACING["sm"]),
+                priority_dropdown,
+            ],
+            spacing=SPACING["md"],
+        )
+        attachment_step = ft.Column(
+            controls=[
+                SectionHeader("Add attachments", "Optional · up to two files, maximum 10 MB each.", is_dark=is_dark),
+                ft.Text("Accepted types: JPG, PNG, WEBP, MP4, MOV, PDF", style=get_text_style("body_small", is_dark)),
+                upload_dropzone,
+                ft.Row(controls=[attach_btn], wrap=True),
+                upload_progress_indicator,
+                files_display,
+            ],
+            spacing=SPACING["md"],
+        )
+
+        review_title = ft.Text("—", style=get_text_style("title", is_dark))
+        review_category = ft.Text("—", style=get_text_style("body", is_dark))
+        review_location = ft.Text("—", style=get_text_style("body", is_dark))
+        review_priority = ft.Text("—", style=get_text_style("body", is_dark))
+        review_privacy = ft.Text("—", style=get_text_style("body_small", is_dark))
+        review_description = ft.Text("—", style=get_text_style("body_small", is_dark), selectable=True)
+        review_attachments = ft.Text("No attachments", style=get_text_style("body_small", is_dark))
+        review_step = ft.Column(
+            controls=[
+                SectionHeader("Review before submitting", "Check the complaint details and privacy choice.", is_dark=is_dark),
+                ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            review_title,
+                            ft.Divider(color=colors["border"]),
+                            review_description,
+                            ft.Row([ft.Text("Category", style=get_text_style("label", is_dark)), review_category], wrap=True),
+                            ft.Row([ft.Text("Location", style=get_text_style("label", is_dark)), review_location], wrap=True),
+                            ft.Row([ft.Text("Priority", style=get_text_style("label", is_dark)), review_priority], wrap=True),
+                            review_privacy,
+                            review_attachments,
+                        ],
+                        spacing=SPACING["sm"],
+                    ),
+                    bgcolor=colors["surface_variant"],
+                    border=ft.Border.all(1, colors["border"]),
+                    border_radius=RADII["md"],
+                    padding=SPACING["lg"],
+                ),
+            ],
+            spacing=SPACING["md"],
+        )
+        wizard_steps = [
+            [detail_header, title_field, desc_field, char_counter, privacy_panel, hostel_panel],
+            [category_step],
+            [attachment_step],
+            [review_step, submit_btn],
+        ]
+        for controls_in_step in wizard_steps:
+            for control in controls_in_step:
+                control.visible = False
+                control.animate_opacity = MOTION_NORMAL_MS
+
+        back_btn = ft.OutlinedButton("Back", icon=ft.Icons.ARROW_BACK, visible=False)
+        back_btn.height = 48
+        next_btn = ft.ElevatedButton("Continue", icon=ft.Icons.ARROW_FORWARD, style=get_button_style(is_dark), height=48)
+        wizard_actions = ft.Row(
+            controls=[back_btn, next_btn],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        )
+
+        def set_wizard_step(index: int, update_page: bool = True):
+            index = max(0, min(index, len(wizard_steps) - 1))
+            step_state[0] = index
+            if index == 3:
+                selected_files = _get_selected_files(self.page)
+                category_text = next((str(item.get("name", "")) for item in self.categories
+                                      if str(item.get("id")) == str(category_dropdown.value)
+                                      or str(item.get("name")) == str(category_dropdown.value)), "—")
+                subcategory_control = getattr(self, "subcategory_dropdown", None)
+                subcategory_text = ""
+                if subcategory_control and getattr(subcategory_control, "options", None):
+                    subcategory_text = next((str(option.text) for option in subcategory_control.options
+                                             if str(option.key) == str(subcategory_control.value)), "")
+                review_title.value = title_field.value or "Untitled complaint"
+                review_description.value = desc_field.value or "—"
+                review_category.value = " · ".join(value for value in (category_text, subcategory_text) if value) or "—"
+                review_location.value = (custom_loc_field.value or "Other / Custom Location") if location_dropdown.value == "OTHER" else next(
+                    (str(item.get("name", "")) for item in self.locations
+                     if str(item.get("id")) == str(location_dropdown.value)), "—"
+                )
+                review_priority.value = priority_dropdown.value or "Low"
+                review_privacy.value = "Anonymous complaint · your name and student identifiers are hidden from staff." if anonymous_checkbox.value else "Submitted with your student account details for staff follow-up."
+                review_attachments.value = f"{len(selected_files)} attachment(s) selected" if selected_files else "No attachments"
+            for step_idx, controls_in_step in enumerate(wizard_steps):
+                for control in controls_in_step:
+                    control.visible = step_idx == index
+            stepper_header.content = make_stepper_header(index)
+            wizard_progress.value = (index + 1) / len(wizard_steps)
+            step_title.value = f"Step {index + 1} of {len(wizard_steps)} · {wizard_step_names[index]}"
+            back_btn.visible = index > 0
+            next_btn.visible = index < len(wizard_steps) - 1
+            if update_page:
+                self.page.update()
+
+        back_btn.on_click = lambda _: set_wizard_step(step_state[0] - 1)
+        next_btn.on_click = lambda _: set_wizard_step(step_state[0] + 1)
+        set_wizard_step(0, update_page=False)
+
         return ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text("Register New Grievance", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                    ft.Text("Step-by-step guided form with attachments", size=12, color=colors["text_muted"]),
-                    ft.Divider(height=1, color=colors["border"]),
+                    SectionHeader("New Complaint", "A guided form with a review before submission.", icon=ft.Icons.ADD_CIRCLE_OUTLINE, is_dark=is_dark),
                     stepper_header,
+                    wizard_progress,
+                    step_title,
                     alert_box,
+                    detail_header,
                     title_field,
                     desc_field,
                     char_counter,
-                    ft.ResponsiveRow(
-                        controls=[
-                            ft.Container(category_dropdown, col={"xs": 12, "sm": 6}),
-                            self.subcat_holder
-                        ]
-                    ),
-                    custom_cat_field,
-                    ft.ResponsiveRow(
-                        controls=[
-                            ft.Container(location_dropdown, col={"xs": 12, "sm": 6}),
-                            ft.Container(custom_loc_field, col={"xs": 12, "sm": 6})
-                        ]
-                    ),
-                    ft.Row(controls=[priority_dropdown]),
-                    anonymous_checkbox,
-                    ft.ResponsiveRow(
-                        controls=[
-                            ft.Container(hostel_checkbox, col={"xs": 12, "sm": 6}),
-                            ft.Container(hostel_note, col={"xs": 12, "sm": 6})
-                        ]
-                    ),
-                    ft.Divider(color=colors["border"]),
-                    ft.Text("Attachments (Max 2 files, up to 10MB each: JPG, PNG, WEBP, MP4, MOV, PDF)", size=13, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                    upload_dropzone,
-                    ft.Row(
-                        controls=[
-                            attach_btn
-                        ]
-                    ),
-                    files_display,
-                    ft.Divider(color=colors["border"]),
-                    submit_btn
+                    privacy_panel,
+                    hostel_panel,
+                    category_step,
+                    attachment_step,
+                    review_step,
+                    submit_btn,
+                    wizard_actions,
                 ],
-                spacing=12,
-                scroll=ft.ScrollMode.AUTO
+                spacing=SPACING["md"],
+                scroll=ft.ScrollMode.AUTO,
+                expand=True,
             ),
             bgcolor=colors["card_bg"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=18,
+            border_radius=RADII["xl"],
             shadow=get_card_shadow(is_dark),
-            padding=22,
+            padding=SPACING["lg"] if self._viewport_layout() == "mobile" else SPACING["2xl"],
             expand=True
         )
 
@@ -1246,7 +1488,7 @@ class StudentView:
             ],
             value="ALL",
             dense=True,
-            width=140
+            expand=True
         )
         priority_filter = ft.Dropdown(
             label="Priority",
@@ -1259,7 +1501,7 @@ class StudentView:
             ],
             value="ALL",
             dense=True,
-            width=140
+            expand=True
         )
 
         cat_filter_opts = [ft.dropdown.Option("ALL", "All Categories")]
@@ -1271,7 +1513,7 @@ class StudentView:
             options=cat_filter_opts,
             value="ALL",
             dense=True,
-            width=160
+            expand=True
         )
 
         subcat_filter_opts = [ft.dropdown.Option("ALL", "All Subcategories")]
@@ -1280,7 +1522,7 @@ class StudentView:
             options=subcat_filter_opts,
             value="ALL",
             dense=True,
-            width=160
+            expand=True
         )
 
         complaints_container = ft.Column(spacing=8)
@@ -1457,21 +1699,13 @@ class StudentView:
 
             cards = [create_complaint_card(c, self._open_detail_dialog, is_staff=False, on_delete=confirm_delete_complaint) for c in filtered]
             if not cards:
-                cards.append(
-                    ft.Container(
-                        content=ft.Column(
-                            controls=[
-                                ft.Icon(ft.Icons.SEARCH_OFF, size=36, color=colors["text_muted"]),
-                                ft.Text("No grievances found matching your search or filter criteria.", size=14, color=colors["text_muted"]),
-                                ft.ElevatedButton("Reset Filters", icon=ft.Icons.CLEAR_ALL, on_click=reset_filters)
-                            ],
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                            spacing=10
-                        ),
-                        alignment=ft.Alignment.CENTER,
-                        padding=40
-                    )
-                )
+                cards.append(EmptyState(
+                    "No matching complaints",
+                    "Try changing your search or filters.",
+                    icon=ft.Icons.SEARCH_OFF,
+                    action=ft.OutlinedButton("Reset Filters", icon=ft.Icons.CLEAR_ALL, on_click=reset_filters),
+                    is_dark=is_dark,
+                ))
 
             complaints_container.controls = cards
             self.page.update()
@@ -1503,49 +1737,75 @@ class StudentView:
 
         refresh_list(force_reload=False)
 
-        return ft.Column(
+        viewport = self._viewport_layout()
+        filter_controls = ft.ResponsiveRow(
             controls=[
-                ft.Row(
-                    controls=[
-                        ft.Text("My Complaints", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                        ft.Row(
-                            controls=[
-                                ft.IconButton(
-                                    icon=ft.Icons.REFRESH,
-                                    tooltip="Refresh from Server",
-                                    on_click=lambda _: refresh_list(force_reload=True)
-                                ),
-                                ft.ElevatedButton(
-                                    content=ft.Text("Submit New"),
-                                    icon=ft.Icons.ADD,
-                                    style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
-                                    on_click=lambda _: self._switch_view(1)
-                                )
-                            ],
-                            spacing=8
-                        )
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    wrap=True
+                ft.Container(search_field, col={"xs": 12, "md": 4}),
+                ft.Container(status_filter, col={"xs": 6, "sm": 6, "md": 2}),
+                ft.Container(priority_filter, col={"xs": 6, "sm": 6, "md": 2}),
+                ft.Container(category_filter, col={"xs": 6, "sm": 6, "md": 2}),
+                ft.Container(subcategory_filter, col={"xs": 6, "sm": 6, "md": 2}),
+            ],
+            spacing=SPACING["sm"],
+            run_spacing=SPACING["sm"],
+        )
+        filters_panel: ft.Control
+        if viewport == "mobile":
+            filters_panel = ft.ExpansionTile(
+                title="Filters",
+                subtitle="Status, priority, category and search",
+                leading=ft.Icons.FILTER_LIST,
+                controls=[filter_controls],
+                expanded=False,
+                bgcolor=colors["surface"],
+                collapsed_bgcolor=colors["surface"],
+                text_color=colors["text"],
+                icon_color=colors["primary"],
+                shape=ft.RoundedRectangleBorder(radius=RADII["md"]),
+                collapsed_shape=ft.RoundedRectangleBorder(radius=RADII["md"]),
+            )
+        else:
+            filters_panel = ft.Container(
+                content=filter_controls,
+                bgcolor=colors["surface"],
+                border=ft.Border.all(1, colors["border"]),
+                border_radius=RADII["md"],
+                padding=SPACING["md"],
+            )
+
+        return PageContainer(ft.Column(
+            controls=[
+                SectionHeader(
+                    "My Complaints",
+                    "Track status, review updates, and manage your submissions.",
+                    icon=ft.Icons.INVENTORY_2_OUTLINED,
+                    action=ft.Row(
+                        controls=[
+                            ft.IconButton(
+                                icon=ft.Icons.REFRESH,
+                                tooltip="Refresh from Server",
+                                on_click=lambda _: refresh_list(force_reload=True),
+                            ),
+                            ft.ElevatedButton(
+                                content=ft.Text("Submit New"),
+                                icon=ft.Icons.ADD,
+                                style=get_button_style(is_dark),
+                                on_click=lambda _: self._switch_view(1),
+                            ),
+                        ],
+                        spacing=SPACING["sm"],
+                        wrap=True,
+                    ),
+                    is_dark=is_dark,
                 ),
-                ft.ResponsiveRow(
-                    controls=[
-                        ft.Container(search_field, col={"xs": 12, "md": 4}),
-                        ft.Container(status_filter, col={"xs": 6, "sm": 3, "md": 2}),
-                        ft.Container(priority_filter, col={"xs": 6, "sm": 3, "md": 2}),
-                        ft.Container(category_filter, col={"xs": 6, "sm": 3, "md": 2}),
-                        ft.Container(subcategory_filter, col={"xs": 6, "sm": 3, "md": 2}),
-                    ],
-                    spacing=8,
-                    run_spacing=8
-                ),
+                filters_panel,
                 ft.Divider(color=colors["border"]),
                 complaints_container
             ],
             scroll=ft.ScrollMode.AUTO,
-            spacing=14,
+            spacing=SPACING["lg"],
             expand=True
-        )
+        ), padding=SPACING["md"] if viewport == "mobile" else SPACING["lg"], is_dark=is_dark)
 
     # -------------------------------------------------------------------------
     # TAB 3: FEEDBACK  (Institution-Wide Resolved Complaints → Detail → Rate)
@@ -1564,6 +1824,7 @@ class StudentView:
         """
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
+        viewport = self._viewport_layout()
 
         # 2-Query pattern: 1 query for all resolved complaints + 1 batch query for student's feedback
         all_resolved = FeedbackService.get_resolved_complaints_for_student(
@@ -1602,10 +1863,11 @@ class StudentView:
             def _row(label: str, value: str) -> ft.Control:
                 return ft.Row(
                     controls=[
-                        ft.Text(label + ":", size=12, color=colors["text_muted"], width=110),
+                        ft.Text(label + ":", size=12, color=colors["text_muted"], width=88 if viewport == "mobile" else 110),
                         ft.Text(str(value or "—"), size=13, color=colors["text"], expand=True)
                     ],
-                    spacing=6
+                    spacing=SPACING["xs"],
+                    vertical_alignment=ft.CrossAxisAlignment.START,
                 )
 
             cat_obj = comp.get("categories")
@@ -1623,7 +1885,7 @@ class StudentView:
                 controls=[
                     ft.Row(
                         controls=[
-                            ft.Text(f"Complaint #{cid}", size=18, weight=ft.FontWeight.BOLD, color=colors["primary"]),
+                            ft.Text(f"Complaint #{cid}", size=18, weight=ft.FontWeight.BOLD, color=colors["primary"], expand=True),
                             ft.Container(
                                 content=ft.Text("✓ Resolved", size=12, weight=ft.FontWeight.BOLD, color="#059669"),
                                 bgcolor=ft.Colors.with_opacity(0.12, "#059669"),
@@ -1631,7 +1893,7 @@ class StudentView:
                                 padding=ft.padding.symmetric(horizontal=8, vertical=3)
                             )
                         ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     _row("Title", comp.get("title") or "—"),
                     _row("Description", comp.get("description") or "—"),
@@ -1699,7 +1961,9 @@ class StudentView:
                                 ft.IconButton(
                                     icon=ft.Icons.STAR if i <= sel else ft.Icons.STAR_BORDER,
                                     icon_color="#f59e0b" if i <= sel else colors["text_muted"],
-                                    icon_size=26,
+                                    icon_size=28,
+                                    width=44,
+                                    height=44,
                                     data=i,
                                     on_click=lambda ev, idx=i: _on_edit_star(ev, idx)
                                 )
@@ -1809,7 +2073,9 @@ class StudentView:
                             ft.IconButton(
                                 icon=ft.Icons.STAR if i <= selected else ft.Icons.STAR_BORDER,
                                 icon_color="#f59e0b" if i <= selected else colors["text_muted"],
-                                icon_size=28,
+                                    icon_size=30,
+                                    width=44,
+                                    height=44,
                                 data=i,
                                 on_click=lambda ev, idx=i: _on_star_click(ev, idx)
                             )
@@ -1918,7 +2184,7 @@ class StudentView:
                         spacing=10,
                         scroll=ft.ScrollMode.AUTO
                     ),
-                    width=540,
+                    width=max(280, min(540, int((self._viewport_width() or 600) - 40))),
                     height=500
                 ),
                 bgcolor=colors["surface"],
@@ -2013,19 +2279,14 @@ class StudentView:
                                                         overlay_color=ft.Colors.TRANSPARENT
                                                     )
                                                 ),
-                                                ft.Text(f"  {title[:50]}", size=14, weight=ft.FontWeight.W_600, color=colors["text"], expand=True)
+                                        ft.Text(f"  {title[:32 if viewport == 'mobile' else 50]}", size=14, weight=ft.FontWeight.W_600, color=colors["text"], expand=True, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)
                                             ],
                                             spacing=0,
                                             expand=True
                                         ),
                                         ft.Row(
                                             controls=[
-                                                ft.Container(
-                                                    content=ft.Text("✓ Resolved", size=11, weight=ft.FontWeight.BOLD, color="#059669"),
-                                                    bgcolor=ft.Colors.with_opacity(0.12, "#059669"),
-                                                    border_radius=12,
-                                                    padding=ft.padding.symmetric(horizontal=8, vertical=3)
-                                                ),
+                                                StatusBadge("Resolved", is_dark),
                                                 ft.Container(
                                                     content=ft.Text(fb_badge_text, size=11, weight=ft.FontWeight.BOLD, color=fb_badge_color),
                                                     bgcolor=ft.Colors.with_opacity(0.12, fb_badge_color),
@@ -2033,11 +2294,12 @@ class StudentView:
                                                     padding=ft.padding.symmetric(horizontal=8, vertical=3)
                                                 )
                                             ],
-                                            spacing=6
+                                            spacing=6,
+                                            tight=True,
                                         )
                                     ],
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                    vertical_alignment=ft.CrossAxisAlignment.CENTER
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                 ),
                                 # Metadata: Category, Department, Resolved Date
                                 ft.Row(
@@ -2084,39 +2346,28 @@ class StudentView:
                                         )
                                     ],
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                    vertical_alignment=ft.CrossAxisAlignment.CENTER
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                 )
                             ],
                             spacing=8
                         ),
                         bgcolor=colors["surface"],
                         border=ft.Border.all(1, colors["border"]),
-                        border_radius=12,
+                        border_radius=RADII["lg"],
                         shadow=get_card_shadow(is_dark),
-                        padding=14,
-                        margin=ft.margin.only(bottom=8)
+                        padding=SPACING["lg"],
+                        margin=ft.margin.only(bottom=SPACING["sm"]),
+                        animate=MOTION_NORMAL_MS,
                     )
                 )
 
             if not filtered:
-                cards.append(
-                    ft.Container(
-                        content=ft.Column(
-                            controls=[
-                                ft.Icon(ft.Icons.INBOX_OUTLINED, size=40, color=colors["text_muted"]),
-                                ft.Text(
-                                    "No resolved complaints found matching your criteria.",
-                                    size=14, color=colors["text_muted"],
-                                    text_align=ft.TextAlign.CENTER
-                                )
-                            ],
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                            spacing=10
-                        ),
-                        padding=ft.padding.symmetric(vertical=32, horizontal=24),
-                        alignment=ft.Alignment(0, 0)
-                    )
-                )
+                cards.append(EmptyState(
+                    "No resolved complaints found",
+                    "Resolved complaints matching these filters will appear here.",
+                    icon=ft.Icons.INBOX_OUTLINED,
+                    is_dark=is_dark,
+                ))
             elif len(filtered) > display_count and not show_all_state[0]:
                 def _expand_cards(e):
                     show_all_state[0] = True
@@ -2161,44 +2412,34 @@ class StudentView:
 
         _refresh_list_view()
 
-        return ft.Column(
+        return PageContainer(ft.Column(
             controls=[
-                ft.Row(
-                    controls=[
-                        ft.Column(
-                            controls=[
-                                ft.Text("Resolved Complaints & Feedback", size=22,
-                                        weight=ft.FontWeight.BOLD, color=colors["text"]),
-                                ft.Text(
-                                    "Institution-wide list of resolved grievances. Review resolution outcomes and submit your feedback.",
-                                    size=13, color=colors["text_muted"]
-                                )
-                            ],
-                            spacing=2
-                        ),
-                        ft.IconButton(
-                            icon=ft.Icons.REFRESH,
-                            tooltip="Refresh list",
-                            on_click=lambda _: (self.invalidate_tab_cache(3), self._switch_view(3))
-                        )
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    wrap=True
+                SectionHeader(
+                    "Resolved Complaints & Feedback",
+                    "Review outcomes and rate how the resolution was handled.",
+                    icon=ft.Icons.RATE_REVIEW_OUTLINED,
+                    action=ft.IconButton(
+                        icon=ft.Icons.REFRESH,
+                        tooltip="Refresh list",
+                        on_click=lambda _: (self.invalidate_tab_cache(3), self._switch_view(3)),
+                    ),
+                    is_dark=is_dark,
                 ),
-                ft.Row(
+                ft.ResponsiveRow(
                     controls=[
-                        search_field,
-                        filter_status
+                        ft.Container(search_field, col={"xs": 12, "md": 8}),
+                        ft.Container(filter_status, col={"xs": 12, "md": 4}),
                     ],
-                    spacing=10
+                    spacing=SPACING["sm"],
+                    run_spacing=SPACING["sm"],
                 ),
                 ft.Divider(color=colors["border"]),
                 complaints_list_container
             ],
             scroll=ft.ScrollMode.AUTO,
-            spacing=12,
+            spacing=SPACING["md"],
             expand=True
-        )
+        ), padding=SPACING["md"] if viewport == "mobile" else SPACING["lg"], is_dark=is_dark)
 
     # -------------------------------------------------------------------------
     # TAB 4: HOSTEL STATUS & RE-REQUEST
@@ -2210,28 +2451,24 @@ class StudentView:
         req = HostelService.get_student_hostel_request(self.student_id)
 
         if not req:
-            return ft.Container(
-                content=ft.Column(
-                    controls=[
-                        ft.Text("Hostel Access Status", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                        ft.Text("You have not requested hostel accommodation yet.", size=14, color=colors["text_muted"]),
-                        ft.ElevatedButton(
-                            content=ft.Text("Request Hostel Access"),
-                            icon=ft.Icons.HOTEL,
-                            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE),
-                            on_click=self._open_hostel_request_modal
-                        )
-                    ],
-                    spacing=16
+            return PageContainer(EmptyState(
+                "Hostel access",
+                "You have not requested hostel accommodation yet.",
+                icon=ft.Icons.HOTEL,
+                action=ft.ElevatedButton(
+                    "Request Hostel Access",
+                    icon=ft.Icons.ADD,
+                    style=get_button_style(is_dark),
+                    on_click=self._open_hostel_request_modal,
                 ),
-                padding=24
-            )
+                is_dark=is_dark,
+            ), padding=SPACING["lg"], is_dark=is_dark)
 
         status = req.get("status", "Pending")
         status_color = "#d97706" if status == "Pending" else ("#059669" if status == "Approved" else "#dc2626")
 
         rows = [
-            ft.Text("Hostel Access Status", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+            SectionHeader("Hostel Access Status", "Review your current accommodation request.", icon=ft.Icons.HOTEL, is_dark=is_dark),
             ft.Container(
                 content=ft.Row(
                     controls=[
@@ -2277,9 +2514,9 @@ class StudentView:
             content=ft.Column(controls=rows, spacing=14),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=14,
+            border_radius=RADII["lg"],
             shadow=get_card_shadow(is_dark),
-            padding=24,
+            padding=SPACING["xl"],
             expand=True
         )
 
@@ -2290,6 +2527,9 @@ class StudentView:
         h_name = ft.TextField(label="Hostel Name", value="Boys Hostel Block A", dense=True)
         h_block = ft.TextField(label="Block", value="A", dense=True)
         h_room = ft.TextField(label="Room Number", value="101", dense=True)
+        for field in (h_name, h_block, h_room):
+            for property_name, property_value in get_input_style(is_dark).items():
+                setattr(field, property_name, property_value)
 
         submit_req_btn = ft.ElevatedButton(
             content=ft.Text("Submit Request"),
@@ -2325,7 +2565,7 @@ class StudentView:
             title=ft.Text("Hostel Accommodation Request", weight=ft.FontWeight.BOLD, color=colors["text"]),
             content=ft.Container(
                 content=ft.Column(controls=[h_name, h_block, h_room], spacing=10),
-                width=400,
+                width=max(280, min(400, int((self._viewport_width() or 440) - 40))),
                 height=200
             ),
             bgcolor=colors["surface"],

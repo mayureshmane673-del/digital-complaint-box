@@ -5,7 +5,10 @@ Supports Dark Mode and responsive scaling.
 
 import flet as ft
 from ui.state import AppState
-from ui.theme import get_theme_colors, COLOR_PRIMARY, get_card_shadow
+from ui.theme import (
+    get_theme_colors, get_card_shadow, get_shadow, get_text_style,
+    RADII, SPACING, HOVER_SCALE, MOTION_FAST_MS,
+)
 
 
 def create_stat_card(
@@ -21,19 +24,28 @@ def create_stat_card(
         is_dark = AppState.is_dark_mode
     colors = get_theme_colors(is_dark)
 
+    def on_hover(e):
+        hovered = str(getattr(e, "data", "")).lower() == "true"
+        e.control.scale = HOVER_SCALE if hovered else 1
+        e.control.shadow = get_shadow("lg" if hovered else "md", is_dark)
+        try:
+            e.control.update()
+        except Exception:
+            pass
+
     return ft.Container(
         content=ft.Row(
             controls=[
                 ft.Container(
                     content=ft.Icon(icon, color=color, size=24),
-                    bgcolor=ft.Colors.with_opacity(0.14, color),
-                    border_radius=12,
-                    padding=10
+                    bgcolor=ft.Colors.with_opacity(0.12, color),
+                    border_radius=RADII["md"],
+                    padding=SPACING["md"]
                 ),
                 ft.Column(
                     controls=[
-                        ft.Text(title, size=12, color=colors["text_muted"], weight=ft.FontWeight.W_600),
-                        ft.Text(value, size=24, color=colors["text"], weight=ft.FontWeight.BOLD),
+                        ft.Text(title, style=get_text_style("body_small", is_dark, weight=ft.FontWeight.W_600)),
+                        ft.Text(value, style=get_text_style("h2", is_dark)),
                     ],
                     spacing=1,
                     alignment=ft.MainAxisAlignment.CENTER,
@@ -46,8 +58,11 @@ def create_stat_card(
         ),
         bgcolor=colors["card_bg"],
         border=ft.Border.all(1, colors["border"]),
-        border_radius=14,
-        padding=ft.padding.symmetric(horizontal=16, vertical=12),
+        border_radius=RADII["lg"],
+        padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["md"]),
         shadow=get_card_shadow(is_dark),
-        col=col
+        col=col,
+        scale=1,
+        animate=MOTION_FAST_MS,
+        on_hover=on_hover,
     )

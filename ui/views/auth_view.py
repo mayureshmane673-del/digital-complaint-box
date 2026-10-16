@@ -11,8 +11,10 @@ import flet as ft
 from services.auth_service import AuthService
 from database.supabase_client import get_supabase_client
 from ui.theme import (
-    COLOR_PRIMARY, COLOR_PRIMARY_LIGHT, COLOR_SURFACE, COLOR_BORDER,
-    COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, get_theme_colors, get_card_shadow
+    MOTION_FAST_MS, MOTION_NORMAL_MS, RADII, SPACING,
+    get_button_style, get_input_style, get_responsive_layout,
+    get_text_style, get_theme_colors, get_card_shadow, PageContainer,
+    DIALOG_MAX_HEIGHT, DIALOG_MAX_WIDTH
 )
 from ui.state import AppState
 from ui.flet_compat import show_feedback_message, open_dialog, close_dialog
@@ -44,18 +46,20 @@ class AuthView:
 
     def _make_alert_box(self) -> ft.Container:
         """Creates an in-form visual banner container for instant feedback."""
+        colors = get_theme_colors(AppState.is_dark_mode)
         icon_ctrl = ft.Icon(ft.Icons.INFO_OUTLINE, size=18, color=ft.Colors.WHITE)
-        text_ctrl = ft.Text("", size=13, weight=ft.FontWeight.W_500, color=ft.Colors.WHITE, expand=True)
+        text_ctrl = ft.Text("", style=get_text_style("body_small", colors["is_dark"], color=ft.Colors.WHITE), weight=ft.FontWeight.W_500, expand=True)
         container = ft.Container(
-            content=ft.Row(controls=[icon_ctrl, text_ctrl], spacing=10),
-            border_radius=8,
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
-            visible=False
+            content=ft.Row(controls=[icon_ctrl, text_ctrl], spacing=SPACING["md"]),
+            border_radius=RADII["md"],
+            padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["sm"]),
+            visible=False,
+            animate_opacity=MOTION_FAST_MS,
         )
 
         def show(msg: str, is_error: bool = True):
             container.visible = True
-            container.bgcolor = "#dc2626" if is_error else "#059669"
+            container.bgcolor = colors["danger"] if is_error else colors["success"]
             icon_ctrl.name = ft.Icons.ERROR_OUTLINE if is_error else ft.Icons.CHECK_CIRCLE_OUTLINE
             text_ctrl.value = msg
             self.page.update()
@@ -72,6 +76,42 @@ class AuthView:
     def render(self, initial_tab: int = 0) -> ft.Control:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
+        raw_width = getattr(self.page, "width", None)
+        screen_width = raw_width if isinstance(raw_width, (int, float)) else 1280
+        responsive_mode = get_responsive_layout(screen_width)
+        viewport_height = getattr(self.page, "height", None)
+        tablet_portrait = responsive_mode == "tablet" and (
+            not isinstance(viewport_height, (int, float)) or viewport_height > screen_width
+        )
+        is_compact = responsive_mode == "mobile" or tablet_portrait
+        input_style = get_input_style(is_dark)
+
+        def style_form_field(field):
+            """Apply shared input tokens without changing a field's handlers."""
+            for name, value in input_style.items():
+                if hasattr(field, name):
+                    setattr(field, name, value)
+            field.error_style = get_text_style("caption", is_dark, color=colors["danger"])
+            original_on_change = getattr(field, "on_change", None)
+            if original_on_change is not None:
+                def clear_inline_error(e, current=field, handler=original_on_change):
+                    current.error_text = None
+                    handler(e)
+                field.on_change = clear_inline_error
+            original_on_select = getattr(field, "on_select", None)
+            if original_on_select is not None:
+                def clear_select_error(e, current=field, handler=original_on_select):
+                    current.error_text = None
+                    handler(e)
+                field.on_select = clear_select_error
+            return field
+
+        def set_inline_error(field, message="Required"):
+            field.error_text = message
+
+        def clear_inline_errors(*fields):
+            for field in fields:
+                field.error_text = None
 
         # In-form visual alert banners
         alert_st_login = self._make_alert_box()
@@ -100,17 +140,22 @@ class AuthView:
                 alignment=ft.MainAxisAlignment.CENTER,
                 spacing=8
             ),
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark, size="lg")
         )
 
         def do_student_login(e):
             if btn_st_login.disabled:
                 return
             alert_st_login.hide_alert()
+            clear_inline_errors(st_login_roll, st_login_pass)
             roll_val = (st_login_roll.value or "").strip()
             pass_val = (st_login_pass.value or "").strip()
 
             if not roll_val or not pass_val:
+                if not roll_val:
+                    set_inline_error(st_login_roll)
+                if not pass_val:
+                    set_inline_error(st_login_pass)
                 alert_st_login.show_alert("Please enter both Roll Number and Password.", is_error=True)
                 show_feedback_message(self.page, "Please enter both Roll Number and Password.", is_error=True)
                 return
@@ -165,6 +210,8 @@ class AuthView:
             self.page.run_thread(authenticate_student)
 
         btn_st_login.on_click = do_student_login
+        st_login_roll.on_submit = do_student_login
+        st_login_pass.on_submit = do_student_login
 
         # ---------------------------------------------------------------------
         # TAB 2: STUDENT REGISTRATION CONTROLS
@@ -199,6 +246,13 @@ class AuthView:
         st_hostel_block = ft.TextField(label="Block", hint_text="e.g. A", dense=True, visible=False)
         st_hostel_room = ft.TextField(label="Room Number", hint_text="e.g. 101", dense=True, visible=False)
 
+        for field in (
+            st_login_roll, st_login_pass, st_reg_roll, st_reg_name, st_reg_dept,
+            st_reg_year, st_reg_pass, st_reg_q, st_reg_ans, st_hostel_name,
+            st_hostel_block, st_hostel_room,
+        ):
+            style_form_field(field)
+
         def on_hostel_toggle(e):
             is_hostel = bool(st_reg_hostel.value)
             st_hostel_name.visible = is_hostel
@@ -207,12 +261,13 @@ class AuthView:
             self.page.update()
 
         st_reg_hostel.on_change = on_hostel_toggle
-        btn_st_reg = ft.ElevatedButton("Register Account", icon=ft.Icons.HOW_TO_REG, style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE))
+        btn_st_reg = ft.ElevatedButton("Register Account", icon=ft.Icons.HOW_TO_REG, style=get_button_style(is_dark, size="lg"))
 
         def do_student_register(e):
             if btn_st_reg.disabled:
                 return
             alert_st_reg.hide_alert()
+            clear_inline_errors(st_reg_roll, st_reg_name, st_reg_pass, st_reg_q, st_reg_ans)
             roll_val = (st_reg_roll.value or "").strip()
             name_val = (st_reg_name.value or "").strip()
             dept_val = st_reg_dept.value
@@ -222,6 +277,12 @@ class AuthView:
             ans_val = (st_reg_ans.value or "").strip()
 
             if not roll_val or not name_val or not pass_val or not q_val or not ans_val:
+                for field, value in (
+                    (st_reg_roll, roll_val), (st_reg_name, name_val),
+                    (st_reg_pass, pass_val), (st_reg_q, q_val), (st_reg_ans, ans_val),
+                ):
+                    if not value:
+                        set_inline_error(field)
                 alert_st_reg.show_alert("Please fill in all required registration fields.", is_error=True)
                 show_feedback_message(self.page, "Please fill in all required registration fields.", is_error=True)
                 return
@@ -283,6 +344,7 @@ class AuthView:
             self.page.run_thread(register_student)
 
         btn_st_reg.on_click = do_student_register
+        st_reg_ans.on_submit = do_student_register
 
         # ---------------------------------------------------------------------
         # TAB 3: STAFF LOGIN CONTROLS (6 Administrative Roles)
@@ -302,6 +364,9 @@ class AuthView:
         sf_login_pass = ft.TextField(label="Password", prefix_icon=ft.Icons.LOCK_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_login_pass, "value", e.control.value))
         sf_login_code = ft.TextField(label="Staff Security Code", hint_text="Role Authority Code", prefix_icon=ft.Icons.KEY_OUTLINED, password=True, can_reveal_password=True, dense=True, on_change=lambda e: setattr(sf_login_code, "value", e.control.value))
 
+        for field in (sf_login_role, sf_login_dept, sf_login_user, sf_login_pass, sf_login_code):
+            style_form_field(field)
+
         def on_staff_role_change(e):
             needs_dept = sf_login_role.value in (UserRole.HOD.value, UserRole.COORDINATOR.value)
             sf_login_dept.visible = needs_dept
@@ -318,13 +383,14 @@ class AuthView:
                 alignment=ft.MainAxisAlignment.CENTER,
                 spacing=8
             ),
-            style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE)
+            style=get_button_style(is_dark, size="lg")
         )
 
         def do_staff_login(e):
             if btn_sf_login.disabled:
                 return
             alert_sf_login.hide_alert()
+            clear_inline_errors(sf_login_user, sf_login_pass, sf_login_code)
             role_val = sf_login_role.value
             dept_val = sf_login_dept.value if (sf_login_dept.visible and role_val in (UserRole.HOD.value, UserRole.COORDINATOR.value)) else None
             if role_val in (UserRole.PRINCIPAL.value, UserRole.HOSTEL_INCHARGE.value, UserRole.LIBRARY_INCHARGE.value):
@@ -336,6 +402,12 @@ class AuthView:
             code_val = (sf_login_code.value or "").strip()
 
             if not user_val or not pass_val or not code_val:
+                for field, value in (
+                    (sf_login_user, user_val), (sf_login_pass, pass_val),
+                    (sf_login_code, code_val),
+                ):
+                    if not value:
+                        set_inline_error(field)
                 alert_sf_login.show_alert("Invalid username, password, or security code.", is_error=True)
                 show_feedback_message(self.page, "Invalid username, password, or security code.", is_error=True)
                 return
@@ -396,6 +468,7 @@ class AuthView:
             self.page.run_thread(authenticate_staff)
 
         btn_sf_login.on_click = do_staff_login
+        sf_login_code.on_submit = do_staff_login
 
         # ---------------------------------------------------------------------
         # TAB 4: STAFF REGISTRATION CONTROLS
@@ -410,6 +483,9 @@ class AuthView:
         sf_reg_q = ft.TextField(label="Security Question", hint_text="e.g. First school or favourite teacher", dense=True, on_change=lambda e: setattr(sf_reg_q, "value", e.control.value))
         sf_reg_ans = ft.TextField(label="Security Answer", dense=True, on_change=lambda e: setattr(sf_reg_ans, "value", e.control.value))
 
+        for field in (sf_reg_role, sf_reg_dept, sf_reg_name, sf_reg_user, sf_reg_pass, sf_reg_code, sf_reg_q, sf_reg_ans):
+            style_form_field(field)
+
         def on_reg_staff_role_change(e):
             needs_dept = sf_reg_role.value in (UserRole.HOD.value, UserRole.COORDINATOR.value)
             sf_reg_dept.visible = needs_dept
@@ -417,12 +493,13 @@ class AuthView:
             self.page.update()
 
         sf_reg_role.on_change = on_reg_staff_role_change
-        btn_sf_reg = ft.ElevatedButton("Create Staff Account", icon=ft.Icons.BADGE, style=ft.ButtonStyle(bgcolor=colors["primary"], color=ft.Colors.WHITE))
+        btn_sf_reg = ft.ElevatedButton("Create Staff Account", icon=ft.Icons.BADGE, style=get_button_style(is_dark, size="lg"))
 
         def do_staff_register(e):
             if btn_sf_reg.disabled:
                 return
             alert_sf_reg.hide_alert()
+            clear_inline_errors(sf_reg_name, sf_reg_user, sf_reg_dept, sf_reg_code)
             role_val = sf_reg_role.value
             dept_val = sf_reg_dept.value if (sf_reg_dept.visible and role_val in (UserRole.HOD.value, UserRole.COORDINATOR.value)) else None
             if role_val in (UserRole.PRINCIPAL.value, UserRole.HOSTEL_INCHARGE.value, UserRole.LIBRARY_INCHARGE.value):
@@ -437,16 +514,22 @@ class AuthView:
             ans_val = (sf_reg_ans.value or "").strip()
 
             if not user_val or not name_val:
+                if not user_val:
+                    set_inline_error(sf_reg_user)
+                if not name_val:
+                    set_inline_error(sf_reg_name)
                 alert_sf_reg.show_alert("Username and Full Name are required.", is_error=True)
                 show_feedback_message(self.page, "Username and Full Name are required.", is_error=True)
                 return
 
             if role_val in (UserRole.HOD.value, UserRole.COORDINATOR.value) and not dept_val:
+                set_inline_error(sf_reg_dept)
                 alert_sf_reg.show_alert(f"Department selection is required for {role_val}.", is_error=True)
                 show_feedback_message(self.page, f"Department selection is required for {role_val}.", is_error=True)
                 return
 
             if not code_val:
+                set_inline_error(sf_reg_code)
                 alert_sf_reg.show_alert("Role Security Code is required.", is_error=True)
                 show_feedback_message(self.page, "Role Security Code is required.", is_error=True)
                 return
@@ -495,16 +578,17 @@ class AuthView:
             self.page.run_thread(register_staff)
 
         btn_sf_reg.on_click = do_staff_register
+        sf_reg_ans.on_submit = do_staff_register
 
         # ---------------------------------------------------------------------
         # FORGOT PASSWORD MODAL
         # ---------------------------------------------------------------------
         def show_forgot_password(e):
-            recov_roll = ft.TextField(label="Enter Student ID / Roll Number", dense=True)
+            recov_roll = style_form_field(ft.TextField(label="Enter Student ID / Roll Number", dense=True))
             question_text = ft.Text("", weight=ft.FontWeight.BOLD, color=colors["primary"], visible=False)
-            recov_ans = ft.TextField(label="Your Security Answer", dense=True, visible=False)
-            recov_new_pass = ft.TextField(label="New Password", password=True, can_reveal_password=True, dense=True, visible=False)
-            recov_btn = ft.ElevatedButton("Find Account", icon=ft.Icons.SEARCH)
+            recov_ans = style_form_field(ft.TextField(label="Your Security Answer", dense=True, visible=False))
+            recov_new_pass = style_form_field(ft.TextField(label="New Password", password=True, can_reveal_password=True, dense=True, visible=False))
+            recov_btn = ft.ElevatedButton("Find Account", icon=ft.Icons.SEARCH, style=get_button_style(is_dark))
 
             def on_recov_action(ev):
                 if recov_btn.disabled:
@@ -531,6 +615,7 @@ class AuthView:
                                 recov_btn.icon = ft.Icons.LOCK_RESET
                                 succeeded = True
                             else:
+                                recov_roll.error_text = msg or "Account not found."
                                 show_feedback_message(self.page, msg or "Account not found.", is_error=True)
                         else:
                             ok, msg = AuthService.reset_student_password(
@@ -543,6 +628,8 @@ class AuthView:
                                 close_dialog(self.page, dlg)
                                 succeeded = True
                             else:
+                                recov_ans.error_text = msg
+                                recov_new_pass.error_text = msg
                                 show_feedback_message(self.page, msg, is_error=True)
                     except Exception as exc:
                         logger.warning("Student password recovery failed (%s)", type(exc).__name__)
@@ -559,25 +646,31 @@ class AuthView:
                 self.page.run_thread(recover_student_password)
 
             recov_btn.on_click = on_recov_action
+            recov_roll.on_submit = on_recov_action
+            recov_new_pass.on_submit = on_recov_action
 
             dlg = ft.AlertDialog(
-                title=ft.Text("Password Recovery & Account Unlock", weight=ft.FontWeight.BOLD, color=colors["text"]),
+                title=ft.Text("Password Recovery & Account Unlock", style=get_text_style("title", is_dark)),
                 content=ft.Container(
                     content=ft.Column(
                         controls=[
-                            ft.Text("Answer your security question to set a new password and unlock your account.", size=13, color=colors["text_muted"]),
+                            ft.Text("Answer your security question to set a new password and unlock your account.", style=get_text_style("body_small", is_dark)),
                             recov_roll,
                             question_text,
                             recov_ans,
                             recov_new_pass,
                             recov_btn
                         ],
-                        spacing=12
+                        spacing=SPACING["md"],
+                        scroll=ft.ScrollMode.AUTO,
                     ),
-                    width=420,
-                    height=280
+                    width=min(DIALOG_MAX_WIDTH / 2, max(SPACING["3xl"], screen_width - 2 * SPACING["lg"])),
+                    height=DIALOG_MAX_HEIGHT / 2,
+                    padding=SPACING["md"],
+                    bgcolor=colors["surface"],
+                    border_radius=RADII["lg"],
                 ),
-                actions=[ft.TextButton("Cancel", on_click=lambda _: close_dialog(self.page, dlg))]
+                actions=[ft.TextButton("Cancel", style=get_button_style(is_dark, "text"), on_click=lambda _: close_dialog(self.page, dlg))]
             )
             open_dialog(self.page, dlg)
 
@@ -587,31 +680,31 @@ class AuthView:
         tab1_content = ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text("Student Portal Access", size=18, weight=ft.FontWeight.BOLD, color=colors["primary"]),
-                    ft.Text("Enter your registered Roll Number and Password to access your grievance portal.", size=13, color=colors["text_muted"]),
+                    ft.Text("Student Portal Access", style=get_text_style("title", is_dark, color=colors["primary"]), weight=ft.FontWeight.BOLD),
+                    ft.Text("Enter your registered Roll Number and Password to access your grievance portal.", style=get_text_style("body_small", is_dark)),
                     alert_st_login,
                     st_login_roll,
                     st_login_pass,
                     ft.Row(
                         controls=[
-                            ft.TextButton("Forgot Password / Locked?", on_click=show_forgot_password),
+                            ft.TextButton("Forgot Password / Locked?", style=get_button_style(is_dark, "text"), on_click=show_forgot_password),
                             btn_st_login
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         wrap=True
                     )
                 ],
-                spacing=14,
+                spacing=SPACING["sm"] if is_compact else SPACING["md"],
                 scroll=ft.ScrollMode.AUTO
             ),
-            padding=ft.padding.symmetric(horizontal=16, vertical=20)
+            padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["sm"] if is_compact else SPACING["xl"])
         )
 
         tab2_content = ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text("New Student Registration", size=18, weight=ft.FontWeight.BOLD, color=colors["primary"]),
-                    ft.Text("Note: Roll Number must be authorized by your Coordinator in the department pool.", size=12, color=colors["text_muted"]),
+                    ft.Text("New Student Registration", style=get_text_style("title", is_dark, color=colors["primary"]), weight=ft.FontWeight.BOLD),
+                    ft.Text("Note: Roll Number must be authorized by your Coordinator in the department pool.", style=get_text_style("body_small", is_dark)),
                     alert_st_reg,
                     ft.ResponsiveRow(controls=[
                         ft.Container(st_reg_roll, col={"xs": 12, "sm": 6}),
@@ -622,7 +715,7 @@ class AuthView:
                         ft.Container(st_reg_year, col={"xs": 12, "sm": 6}),
                     ]),
                     st_reg_pass,
-                    ft.Text("Minimum 8 characters with uppercase, lowercase, number and symbol.", size=11, color=colors["text_muted"]),
+                    ft.Text("Minimum 8 characters with uppercase, lowercase, number and symbol.", style=get_text_style("caption", is_dark)),
                     ft.ResponsiveRow(controls=[
                         ft.Container(st_reg_q, col={"xs": 12, "sm": 6}),
                         ft.Container(st_reg_ans, col={"xs": 12, "sm": 6}),
@@ -635,17 +728,17 @@ class AuthView:
                     ]),
                     btn_st_reg
                 ],
-                spacing=12,
+                spacing=SPACING["md"],
                 scroll=ft.ScrollMode.AUTO
             ),
-            padding=ft.padding.symmetric(horizontal=16, vertical=20)
+            padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["xl"])
         )
 
         tab3_content = ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text("Staff / Administration Login", size=18, weight=ft.FontWeight.BOLD, color=colors["primary"]),
-                    ft.Text("Requires valid staff credentials and role security code.", size=13, color=colors["text_muted"]),
+                    ft.Text("Staff / Administration Login", style=get_text_style("title", is_dark, color=colors["primary"]), weight=ft.FontWeight.BOLD),
+                    ft.Text("Requires valid staff credentials and role security code.", style=get_text_style("body_small", is_dark)),
                     alert_sf_login,
                     ft.ResponsiveRow(controls=[
                         ft.Container(sf_login_role, col={"xs": 12, "sm": 6}),
@@ -656,17 +749,17 @@ class AuthView:
                     sf_login_code,
                     btn_sf_login
                 ],
-                spacing=14,
+                spacing=SPACING["md"],
                 scroll=ft.ScrollMode.AUTO
             ),
-            padding=ft.padding.symmetric(horizontal=16, vertical=20)
+            padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["xl"])
         )
 
         tab4_content = ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text("Staff Self-Registration", size=18, weight=ft.FontWeight.BOLD, color=colors["primary"]),
-                    ft.Text("Authorized faculty registration with department verification.", size=12, color=colors["text_muted"]),
+                    ft.Text("Staff Self-Registration", style=get_text_style("title", is_dark, color=colors["primary"]), weight=ft.FontWeight.BOLD),
+                    ft.Text("Authorized faculty registration with department verification.", style=get_text_style("body_small", is_dark)),
                     alert_sf_reg,
                     ft.ResponsiveRow(controls=[
                         ft.Container(sf_reg_role, col={"xs": 12, "sm": 6}),
@@ -677,7 +770,7 @@ class AuthView:
                         ft.Container(sf_reg_user, col={"xs": 12, "sm": 6}),
                     ]),
                     sf_reg_pass,
-                    ft.Text("Minimum 8 characters.", size=11, color=colors["text_muted"]),
+                    ft.Text("Minimum 8 characters.", style=get_text_style("caption", is_dark)),
                     sf_reg_code,
                     ft.ResponsiveRow(controls=[
                         ft.Container(sf_reg_q, col={"xs": 12, "sm": 6}),
@@ -685,74 +778,105 @@ class AuthView:
                     ]),
                     btn_sf_reg
                 ],
-                spacing=12,
+                spacing=SPACING["md"],
                 scroll=ft.ScrollMode.AUTO
             ),
-            padding=ft.padding.symmetric(horizontal=16, vertical=20)
+            padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["xl"])
         )
 
-        raw_width = getattr(self.page, "width", None)
-        screen_width = raw_width if isinstance(raw_width, (int, float)) else 1280
-        is_compact = screen_width < 1024
+        selected_portal = 1 if initial_tab >= 2 else 0
+        selected_mode = initial_tab % 2
+        tab_animation = ft.Duration(milliseconds=MOTION_NORMAL_MS)
 
-        # On narrow screens, keep portal selection and action selection on two
-        # short tab bars so none of the four auth routes is clipped.
-        if screen_width < 1150:
-            student_tabs = ft.Tabs(
-                selected_index=initial_tab % 2,
-                length=2,
-                animation_duration=ft.Duration(milliseconds=180),
-                content=ft.Column(expand=True, controls=[
-                    ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
-                        ft.Tab(label="Login", icon=ft.Icons.LOGIN),
-                        ft.Tab(label="Create Account", icon=ft.Icons.PERSON_ADD),
-                    ]),
-                    ft.TabBarView(expand=True, controls=[tab1_content, tab2_content]),
-                ]),
-                expand=True,
-            )
-            staff_tabs = ft.Tabs(
-                selected_index=initial_tab % 2,
-                length=2,
-                animation_duration=ft.Duration(milliseconds=180),
-                content=ft.Column(expand=True, controls=[
-                    ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
-                        ft.Tab(label="Login", icon=ft.Icons.LOGIN),
-                        ft.Tab(label="Create Account", icon=ft.Icons.PERSON_ADD),
-                    ]),
-                    ft.TabBarView(expand=True, controls=[tab3_content, tab4_content]),
-                ]),
-                expand=True,
-            )
-            tabs = ft.Tabs(
-                selected_index=1 if initial_tab >= 2 else 0,
-                length=2,
-                animation_duration=ft.Duration(milliseconds=180),
-                content=ft.Column(expand=True, controls=[
-                    ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
-                        ft.Tab(label="Student Portal", icon=ft.Icons.SCHOOL),
-                        ft.Tab(label="Staff Portal", icon=ft.Icons.ADMIN_PANEL_SETTINGS),
-                    ]),
-                    ft.TabBarView(expand=True, controls=[student_tabs, staff_tabs]),
-                ]),
-                expand=True,
-            )
-        else:
-            tabs = ft.Tabs(
-                selected_index=initial_tab,
-                length=4,
-                animation_duration=ft.Duration(milliseconds=180),
-                content=ft.Column(expand=True, controls=[
-                    ft.TabBar(scrollable=False, tab_alignment=ft.TabAlignment.FILL, tabs=[
-                        ft.Tab(label="Student Login", icon=ft.Icons.SCHOOL),
-                        ft.Tab(label="Student Register", icon=ft.Icons.PERSON_ADD),
-                        ft.Tab(label="Staff Login", icon=ft.Icons.ADMIN_PANEL_SETTINGS),
-                        ft.Tab(label="Staff Register", icon=ft.Icons.SECURITY),
-                    ]),
-                    ft.TabBarView(expand=True, controls=[tab1_content, tab2_content, tab3_content, tab4_content]),
-                ]),
-                expand=True,
-            )
+        student_tabs = ft.Tabs(
+            selected_index=selected_mode,
+            length=2,
+            animation_duration=tab_animation,
+            content=ft.Column(expand=True, controls=[
+                ft.TabBar(tabs=[
+                    ft.Tab(label="Login", icon=ft.Icons.LOGIN),
+                    ft.Tab(label="Create Account", icon=ft.Icons.PERSON_ADD),
+                ], visible=False),
+                ft.TabBarView(expand=True, controls=[tab1_content, tab2_content]),
+            ]),
+            expand=True,
+        )
+        staff_tabs = ft.Tabs(
+            selected_index=selected_mode,
+            length=2,
+            animation_duration=tab_animation,
+            content=ft.Column(expand=True, controls=[
+                ft.TabBar(tabs=[
+                    ft.Tab(label="Login", icon=ft.Icons.LOGIN),
+                    ft.Tab(label="Create Account", icon=ft.Icons.PERSON_ADD),
+                ], visible=False),
+                ft.TabBarView(expand=True, controls=[tab3_content, tab4_content]),
+            ]),
+            expand=True,
+        )
+        tabs = ft.Tabs(
+            selected_index=selected_portal,
+            length=2,
+            animation_duration=tab_animation,
+            content=ft.Column(expand=True, controls=[
+                ft.TabBar(tabs=[
+                    ft.Tab(label="Student Portal", icon=ft.Icons.SCHOOL),
+                    ft.Tab(label="Staff Portal", icon=ft.Icons.ADMIN_PANEL_SETTINGS),
+                ], visible=False),
+                ft.TabBarView(expand=True, controls=[student_tabs, staff_tabs]),
+            ]),
+            expand=True,
+        )
+
+        segmented_style = ft.ButtonStyle(
+            bgcolor={
+                ft.ControlState.DEFAULT: colors["surface_variant"],
+                ft.ControlState.SELECTED: colors["primary"],
+            },
+            color={
+                ft.ControlState.DEFAULT: colors["text_muted"],
+                ft.ControlState.SELECTED: ft.Colors.WHITE,
+            },
+            side=ft.BorderSide(1, colors["border"]),
+            shape=ft.RoundedRectangleBorder(radius=RADII["pill"]),
+            padding=ft.padding.symmetric(horizontal=SPACING["md"], vertical=SPACING["sm"]),
+        )
+        portal_selector = ft.SegmentedButton(
+            segments=[
+                ft.Segment(value="student", icon=ft.Icons.SCHOOL, label="Student Portal"),
+                ft.Segment(value="staff", icon=ft.Icons.ADMIN_PANEL_SETTINGS, label="Staff Portal"),
+            ],
+            selected=["staff" if selected_portal else "student"],
+            show_selected_icon=False,
+            style=segmented_style,
+            expand=True,
+        )
+        mode_selector = ft.SegmentedButton(
+            segments=[
+                ft.Segment(value="login", icon=ft.Icons.LOGIN, label="Login"),
+                ft.Segment(value="register", icon=ft.Icons.PERSON_ADD, label="Create Account"),
+            ],
+            selected=["register" if selected_mode else "login"],
+            show_selected_icon=False,
+            style=segmented_style,
+            expand=True,
+        )
+
+        def on_portal_change(e):
+            selected = e.control.selected[0]
+            tabs.selected_index = 1 if selected == "staff" else 0
+            active_tabs = staff_tabs if selected == "staff" else student_tabs
+            mode_selector.selected = ["register" if active_tabs.selected_index else "login"]
+            self.page.update()
+
+        def on_mode_change(e):
+            selected = e.control.selected[0]
+            active_tabs = staff_tabs if tabs.selected_index else student_tabs
+            active_tabs.selected_index = 1 if selected == "register" else 0
+            self.page.update()
+
+        portal_selector.on_change = on_portal_change
+        mode_selector.on_change = on_mode_change
 
         card_header = ft.Container(
             content=ft.Row(
@@ -760,13 +884,13 @@ class AuthView:
                     ft.Container(
                         content=ft.Icon(ft.Icons.ACCOUNT_BALANCE, size=24, color=colors["primary"]),
                         bgcolor=ft.Colors.with_opacity(0.12, colors["primary"]),
-                        border_radius=12,
-                        padding=8
+                        border_radius=RADII["md"],
+                        padding=SPACING["sm"]
                     ),
                     ft.Column(
                         controls=[
-                            ft.Text("Digital Complaint Box", size=18, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                            ft.Text("Official Grievance Redressal Portal", size=11, color=colors["text_muted"])
+                            ft.Text("Welcome back", style=get_text_style("title", is_dark)),
+                            ft.Text("Sign in or create your campus account", style=get_text_style("caption", is_dark))
                         ],
                         spacing=1
                     )
@@ -774,52 +898,83 @@ class AuthView:
                 spacing=10,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER
             ),
-            padding=ft.padding.only(left=16, right=16, top=14, bottom=6)
+            padding=ft.padding.only(
+                left=SPACING["lg"],
+                right=SPACING["lg"],
+                top=SPACING["sm"] if is_compact else SPACING["lg"],
+                bottom=SPACING["xs"] if is_compact else SPACING["sm"]
+            )
         )
 
+        auth_height = DIALOG_MAX_HEIGHT - SPACING["3xl"]
         auth_card = ft.Container(
             content=ft.Column(
                 controls=[
                     card_header,
+                    ft.Container(content=portal_selector, padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["xs"])),
+                    ft.Container(content=mode_selector, padding=ft.padding.symmetric(horizontal=SPACING["lg"], vertical=SPACING["xs"])),
                     ft.Divider(height=1, color=colors["border"]),
                     tabs
                 ],
-                spacing=0,
+                spacing=SPACING["xs"],
                 expand=True
             ),
             bgcolor=colors["card_bg"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=18,
+            border_radius=RADII["xl"],
             shadow=get_card_shadow(is_dark),
-            height=620,
-            col={"xs": 12, "md": 7, "lg": 7}
+            height=auth_height,
+            col={"xs": 12, "lg": 7},
+            animate_opacity=MOTION_FAST_MS,
         )
 
         if is_compact:
-            # Mobile layout: Stack compact campus hero banner at top, glass card below
-            mobile_hero = create_login_hero_panel(is_staff=False, is_dark=is_dark, compact=True)
-            return ft.Container(
+            compact_brand = ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Container(
+                            content=ft.Icon(ft.Icons.ACCOUNT_BALANCE, size=22, color=colors["primary"]),
+                            bgcolor=colors["surface"],
+                            border=ft.Border.all(1, colors["border"]),
+                            border_radius=RADII["md"],
+                            padding=SPACING["sm"],
+                        ),
+                        ft.Column(
+                            controls=[
+                                ft.Text("Digital Complaint Box", style=get_text_style("title", is_dark)),
+                                ft.Text("A transparent campus grievance portal", style=get_text_style("caption", is_dark)),
+                            ],
+                            spacing=SPACING["xs"],
+                            expand=True,
+                        ),
+                    ],
+                    spacing=SPACING["md"],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=SPACING["sm"],
+                animate_opacity=MOTION_FAST_MS,
+            )
+            return PageContainer(
                 content=ft.Column(
                     controls=[
-                        mobile_hero,
+                        compact_brand,
                         auth_card
                     ],
-                    spacing=12,
-                    scroll=ft.ScrollMode.AUTO
+                    spacing=SPACING["md"],
+                    scroll=ft.ScrollMode.AUTO,
                 ),
-                bgcolor=colors["bg"],
-                expand=True,
-                padding=12
+                padding=SPACING["md"],
+                is_dark=is_dark,
             )
 
-        # Desktop layout: Side-by-side campus hero panel + elevated glass login card
+        # Desktop and laptop split: campus lifecycle panel beside the form.
         desktop_hero = ft.Container(
             content=create_login_hero_panel(is_staff=False, is_dark=is_dark, compact=False),
-            height=620,
-            col={"xs": 12, "md": 5, "lg": 5}
+            height=auth_height,
+            col={"xs": 12, "lg": 5},
         )
 
-        return ft.Container(
+        return PageContainer(
             content=ft.Column(
                 controls=[
                     ft.ResponsiveRow(
@@ -827,15 +982,14 @@ class AuthView:
                             desktop_hero,
                             auth_card
                         ],
-                        spacing=20,
-                        run_spacing=20,
-                        vertical_alignment=ft.CrossAxisAlignment.START
+                        spacing=SPACING["lg"],
+                        run_spacing=SPACING["lg"],
+                        vertical_alignment=ft.CrossAxisAlignment.START,
                     )
                 ],
                 scroll=ft.ScrollMode.AUTO,
                 expand=True
             ),
-            bgcolor=colors["bg"],
-            expand=True,
-            padding=ft.padding.symmetric(horizontal=24, vertical=16)
+            padding=ft.padding.symmetric(horizontal=SPACING["xl"], vertical=SPACING["lg"]),
+            is_dark=is_dark,
         )

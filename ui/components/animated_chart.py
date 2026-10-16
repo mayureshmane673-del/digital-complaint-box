@@ -8,8 +8,8 @@ import math
 from typing import Dict, Any, Optional
 import flet as ft
 from ui.theme import (
-    COLOR_PRIMARY, COLOR_PRIMARY_LIGHT, COLOR_SURFACE, COLOR_BORDER,
-    COLOR_TEXT_PRIMARY, COLOR_TEXT_MUTED, get_theme_colors
+    get_theme_colors, get_chart_palette, get_department_color,
+    RADII, SPACING,
 )
 
 
@@ -29,7 +29,7 @@ def create_circular_status_chart(
     Zero complaints empty circular state and real-time live DB metrics.
     """
     colors = get_theme_colors(is_dark)
-    track_color = colors.get("surface_variant", "#e2e8f0" if not is_dark else "#334155")
+    track_color = colors["surface_variant"]
 
     # Metrics calculation
     res_rate = round((resolved / registered) * 100, 1) if registered > 0 else 0.0
@@ -73,22 +73,22 @@ def create_circular_status_chart(
         cum_f = 0.0
         if res_frac > 0:
             ring_layers.append(
-                ft.ProgressRing(value=res_frac, stroke_width=16, color="#059669", rotate=2 * math.pi * cum_f, width=180, height=180)
+                ft.ProgressRing(value=res_frac, stroke_width=16, color=colors["success"], rotate=2 * math.pi * cum_f, width=180, height=180)
             )
             cum_f += res_frac
         if in_prog_frac > 0:
             ring_layers.append(
-                ft.ProgressRing(value=in_prog_frac, stroke_width=16, color="#2563eb", rotate=2 * math.pi * cum_f, width=180, height=180)
+                ft.ProgressRing(value=in_prog_frac, stroke_width=16, color=colors["info"], rotate=2 * math.pi * cum_f, width=180, height=180)
             )
             cum_f += in_prog_frac
         if pend_frac > 0:
             ring_layers.append(
-                ft.ProgressRing(value=pend_frac, stroke_width=16, color="#d97706", rotate=2 * math.pi * cum_f, width=180, height=180)
+                ft.ProgressRing(value=pend_frac, stroke_width=16, color=colors["warning"], rotate=2 * math.pi * cum_f, width=180, height=180)
             )
             cum_f += pend_frac
         if rej_frac > 0:
             ring_layers.append(
-                ft.ProgressRing(value=rej_frac, stroke_width=16, color="#dc2626", rotate=2 * math.pi * cum_f, width=180, height=180)
+                ft.ProgressRing(value=rej_frac, stroke_width=16, color=colors["danger"], rotate=2 * math.pi * cum_f, width=180, height=180)
             )
             cum_f += rej_frac
 
@@ -150,18 +150,18 @@ def create_circular_status_chart(
                 padding=ft.padding.symmetric(horizontal=10, vertical=6),
                 margin=ft.margin.only(bottom=6)
             ),
-            make_stat_metric("Resolved Grievances", resolved, res_rate, "#059669"),
-            make_stat_metric("In Progress (Assigned)", in_progress, in_prog_rate, "#2563eb"),
-            make_stat_metric("Pending Initial Review", pending, pend_rate, "#d97706"),
-            make_stat_metric("Rejected / Invalid", rejected, rej_rate, "#dc2626"),
+            make_stat_metric("Resolved Grievances", resolved, res_rate, colors["success"]),
+            make_stat_metric("In Progress (Assigned)", in_progress, in_prog_rate, colors["info"]),
+            make_stat_metric("Pending Initial Review", pending, pend_rate, colors["warning"]),
+            make_stat_metric("Rejected / Invalid", rejected, rej_rate, colors["danger"]),
             ft.Divider(color=colors["border"], height=12),
             ft.Row(
                 controls=[
                     ft.Text("Overall Resolution Rate:", size=12, weight=ft.FontWeight.W_600, color=colors["text_muted"]),
                     ft.Container(
-                        content=ft.Text(f"{res_rate}%", size=13, weight=ft.FontWeight.BOLD, color="#059669"),
-                        bgcolor="#d1fae5" if not is_dark else "#064e3b",
-                        border_radius=6,
+                        content=ft.Text(f"{res_rate}%", size=13, weight=ft.FontWeight.BOLD, color=colors["success"]),
+                        bgcolor=ft.Colors.with_opacity(0.12, colors["success"]),
+                        border_radius=RADII["sm"],
                         padding=ft.padding.symmetric(horizontal=8, vertical=2)
                     )
                 ],
@@ -209,9 +209,9 @@ def create_circular_status_chart(
                             spacing=2
                         ),
                         ft.Container(
-                            content=ft.Text(f"{res_rate}% Resolved", size=12, weight=ft.FontWeight.BOLD, color="#059669"),
-                            bgcolor="#d1fae5" if not is_dark else "#064e3b",
-                            border_radius=8,
+                            content=ft.Text(f"{res_rate}% Resolved", size=12, weight=ft.FontWeight.BOLD, color=colors["success"]),
+                            bgcolor=ft.Colors.with_opacity(0.12, colors["success"]),
+                            border_radius=RADII["sm"],
                             padding=ft.padding.symmetric(horizontal=10, vertical=4)
                         )
                     ],
@@ -245,32 +245,33 @@ def create_hero_3d_badge(is_dark: bool = False) -> ft.Control:
         controls=[
             # Base shadow/glow layer (offset)
             ft.Container(
-                width=340,
                 height=240,
-                margin=ft.margin.only(top=12, left=12),
-                border_radius=20,
+                expand=True,
+                margin=ft.margin.only(top=SPACING["sm"], left=SPACING["sm"]),
+                border_radius=RADII["xl"],
                 bgcolor=ft.Colors.with_opacity(0.18, colors["primary"]),
             ),
             # Intermediate gradient backdrop layer
             ft.Container(
-                width=340,
                 height=240,
-                margin=ft.margin.only(top=6, left=6),
-                border_radius=20,
+                expand=True,
+                margin=ft.margin.only(top=SPACING["xs"], left=SPACING["xs"]),
+                border_radius=RADII["xl"],
                 gradient=ft.LinearGradient(
                     begin=ft.Alignment.TOP_LEFT,
                     end=ft.Alignment.BOTTOM_RIGHT,
-                    colors=["#1e3a8a", "#2563eb"] if not is_dark else ["#0f172a", "#1e3a8a"]
+                    colors=[colors["primary_hover"], colors["primary"]]
                 ),
             ),
             # Front crisp layered card
             ft.Container(
-                width=340,
+                expand=True,
+                margin=ft.margin.only(right=SPACING["sm"], bottom=SPACING["sm"]),
                 height=240,
                 bgcolor=colors["surface"],
                 border=ft.Border.all(1.5, colors["border"]),
-                border_radius=20,
-                padding=20,
+                border_radius=RADII["xl"],
+                padding=SPACING["lg"],
                 content=ft.Column(
                     controls=[
                         ft.Row(
@@ -291,33 +292,33 @@ def create_hero_3d_badge(is_dark: bool = False) -> ft.Control:
                             ],
                             spacing=12
                         ),
-                        ft.Divider(color=colors["border"], height=16),
+                        ft.Divider(color=colors["border"], height=SPACING["lg"]),
                         ft.Column(
                             controls=[
                                 ft.Row(
                                     controls=[
-                                        ft.Icon(ft.Icons.LOCK, size=14, color="#059669"),
+                                        ft.Icon(ft.Icons.LOCK, size=14, color=colors["success"]),
                                         ft.Text("Zero Credential Leakage to UI", size=12, weight=ft.FontWeight.W_500, color=colors["text"])
                                     ],
                                     spacing=8
                                 ),
                                 ft.Row(
                                     controls=[
-                                        ft.Icon(ft.Icons.SHIELD, size=14, color="#2563eb"),
+                                        ft.Icon(ft.Icons.SHIELD, size=14, color=colors["info"]),
                                         ft.Text("PostgreSQL RLS & Role Isolation", size=12, weight=ft.FontWeight.W_500, color=colors["text"])
                                     ],
                                     spacing=8
                                 ),
                                 ft.Row(
                                     controls=[
-                                        ft.Icon(ft.Icons.SCHOOL, size=14, color="#d97706"),
+                                        ft.Icon(ft.Icons.SCHOOL, size=14, color=colors["warning"]),
                                         ft.Text("5 Departments: CSE, AIDS, E&TC, MECH, Civil", size=11, weight=ft.FontWeight.W_500, color=colors["text"])
                                     ],
                                     spacing=8
                                 ),
                                 ft.Row(
                                     controls=[
-                                        ft.Icon(ft.Icons.FINGERPRINT, size=14, color="#7c3aed"),
+                                        ft.Icon(ft.Icons.FINGERPRINT, size=14, color=colors["accent"]),
                                         ft.Text("Student Roll Pool Authorization", size=12, weight=ft.FontWeight.W_500, color=colors["text"])
                                     ],
                                     spacing=8
@@ -331,7 +332,7 @@ def create_hero_3d_badge(is_dark: bool = False) -> ft.Control:
                 )
             )
         ],
-        width=360,
+        expand=True,
         height=260
     )
 
@@ -347,14 +348,6 @@ def create_campus_overview_card(dept_metrics: list, is_dark: bool = False) -> ft
         return ft.Container()
 
     dept_cards = []
-    dept_colors = {
-        "CSE": "#2563eb",
-        "AIDS": "#7c3aed",
-        "E&TC": "#0f766e",
-        "MECH": "#ea580c",
-        "Civil": "#059669"
-    }
-
     for d in dept_metrics:
         code = d.get("code", "DEPT")
         name = d.get("name", "Department")
@@ -362,7 +355,7 @@ def create_campus_overview_card(dept_metrics: list, is_dark: bool = False) -> ft
         resolved = d.get("resolved", 0)
         pending = d.get("pending", 0)
         in_prog = d.get("in_progress", 0)
-        accent = dept_colors.get(code, colors["primary"])
+        accent = get_department_color(code)
         res_rate = round((resolved / total * 100), 1) if total > 0 else 0.0
 
         card = ft.Container(
@@ -376,9 +369,10 @@ def create_campus_overview_card(dept_metrics: list, is_dark: bool = False) -> ft
                                 border_radius=6,
                                 padding=ft.padding.symmetric(horizontal=8, vertical=4)
                             ),
-                            ft.Text(f"{res_rate}% Resolved", size=11, weight=ft.FontWeight.BOLD, color="#059669" if res_rate > 50 else "#d97706")
+                            ft.Text(f"{res_rate}% Resolved", size=11, weight=ft.FontWeight.BOLD, color=colors["success"] if res_rate > 50 else colors["warning"])
                         ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True,
                     ),
                     ft.Text(name, size=12, weight=ft.FontWeight.W_600, color=colors["text"], max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                     ft.Divider(color=colors["border"], height=10),
@@ -393,21 +387,21 @@ def create_campus_overview_card(dept_metrics: list, is_dark: bool = False) -> ft
                             ),
                             ft.Column(
                                 controls=[
-                                    ft.Text(str(pending), size=18, weight=ft.FontWeight.BOLD, color="#d97706"),
+                                    ft.Text(str(pending), size=18, weight=ft.FontWeight.BOLD, color=colors["warning"]),
                                     ft.Text("Pending", size=10, color=colors["text_muted"])
                                 ],
                                 spacing=0
                             ),
                             ft.Column(
                                 controls=[
-                                    ft.Text(str(in_prog), size=18, weight=ft.FontWeight.BOLD, color="#2563eb"),
+                                    ft.Text(str(in_prog), size=18, weight=ft.FontWeight.BOLD, color=colors["info"]),
                                     ft.Text("In Progress", size=10, color=colors["text_muted"])
                                 ],
                                 spacing=0
                             ),
                             ft.Column(
                                 controls=[
-                                    ft.Text(str(resolved), size=18, weight=ft.FontWeight.BOLD, color="#059669"),
+                                    ft.Text(str(resolved), size=18, weight=ft.FontWeight.BOLD, color=colors["success"]),
                                     ft.Text("Resolved", size=10, color=colors["text_muted"])
                                 ],
                                 spacing=0
@@ -420,8 +414,8 @@ def create_campus_overview_card(dept_metrics: list, is_dark: bool = False) -> ft
             ),
             bgcolor=colors["surface"],
             border=ft.Border.all(1, colors["border"]),
-            border_radius=12,
-            padding=14
+            border_radius=RADII["md"],
+            padding=SPACING["md"]
         )
         dept_cards.append(ft.Container(card, col={"xs": 12, "sm": 6, "md": 4, "lg": 2.4}))
 
@@ -440,7 +434,7 @@ def create_campus_overview_card(dept_metrics: list, is_dark: bool = False) -> ft
                         ft.Container(
                             content=ft.Text("5 Departments Tracked", size=11, weight=ft.FontWeight.BOLD, color=colors["primary"]),
                             bgcolor=ft.Colors.with_opacity(0.12, colors["primary"]),
-                            border_radius=8,
+                            border_radius=RADII["sm"],
                             padding=ft.padding.symmetric(horizontal=8, vertical=4)
                         )
                     ],
@@ -454,8 +448,8 @@ def create_campus_overview_card(dept_metrics: list, is_dark: bool = False) -> ft
         ),
         bgcolor=colors["surface"],
         border=ft.Border.all(1, colors["border"]),
-        border_radius=12,
-        padding=16
+        border_radius=RADII["md"],
+        padding=SPACING["lg"]
     )
 
 
@@ -505,10 +499,10 @@ def create_priority_distribution_chart(
     low_cnt = sum(1 for c in complaints if (c.get("priority") or "").capitalize() in ("Low", ""))
 
     prio_data = [
-        ("Urgent", urgent_cnt, "#dc2626"),
-        ("High", high_cnt, "#ea580c"),
-        ("Medium", med_cnt, "#d97706"),
-        ("Low", low_cnt, "#10b981")
+        ("Urgent", urgent_cnt, colors["danger"]),
+        ("High", high_cnt, get_chart_palette()[3]),
+        ("Medium", med_cnt, colors["warning"]),
+        ("Low", low_cnt, colors["success"])
     ]
 
     metric_bars = []
@@ -534,12 +528,13 @@ def create_priority_distribution_chart(
                             spacing=4
                         )
                     ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True,
                 ),
                 ft.ProgressBar(
                     value=frac,
                     color=color_hex,
-                    bgcolor=colors.get("surface_variant", "#e2e8f0" if not is_dark else "#334155"),
+                    bgcolor=colors["surface_variant"],
                     height=8,
                     border_radius=4
                 )
@@ -567,7 +562,8 @@ def create_priority_distribution_chart(
                             padding=ft.padding.symmetric(horizontal=8, vertical=3)
                         )
                     ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    wrap=True,
                 ),
                 ft.Text(subtitle or "Distribution across Urgency classifications", size=12, color=colors["text_muted"]),
                 ft.Divider(color=colors["border"], height=12),
@@ -577,8 +573,8 @@ def create_priority_distribution_chart(
         ),
         bgcolor=colors["surface"],
         border=ft.Border.all(1, colors["border"]),
-        border_radius=12,
-        padding=16
+        border_radius=RADII["md"],
+        padding=SPACING["lg"]
     )
 
 
@@ -630,7 +626,7 @@ def create_category_distribution_chart(
         cname = cat_obj.get("name") if isinstance(cat_obj, dict) else (c.get("category_name") or c.get("category_custom") or "General / Other")
         cat_counts[str(cname)] += 1
 
-    palette = ["#2563eb", "#7c3aed", "#059669", "#d97706", "#ea580c", "#0f766e", "#e11d48", "#4f46e5"]
+    palette = get_chart_palette()
     bars = []
     for idx, (cat_name, count) in enumerate(cat_counts.most_common(max_items)):
         color_hex = palette[idx % len(palette)]
@@ -655,12 +651,13 @@ def create_category_distribution_chart(
                             spacing=4
                         )
                     ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True,
                 ),
                 ft.ProgressBar(
                     value=frac,
                     color=color_hex,
-                    bgcolor=colors.get("surface_variant", "#e2e8f0" if not is_dark else "#334155"),
+                    bgcolor=colors["surface_variant"],
                     height=8,
                     border_radius=4
                 )
@@ -688,7 +685,8 @@ def create_category_distribution_chart(
                             padding=ft.padding.symmetric(horizontal=8, vertical=3)
                         )
                     ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    wrap=True,
                 ),
                 ft.Text(subtitle or "Grievances segmented by category", size=12, color=colors["text_muted"]),
                 ft.Divider(color=colors["border"], height=12),
@@ -698,6 +696,6 @@ def create_category_distribution_chart(
         ),
         bgcolor=colors["surface"],
         border=ft.Border.all(1, colors["border"]),
-        border_radius=12,
-        padding=16
+        border_radius=RADII["md"],
+        padding=SPACING["lg"]
     )
