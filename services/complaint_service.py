@@ -77,8 +77,32 @@ class ComplaintService:
         if str(st_rec.get("department_id")) != str(department_id):
             return False, f"Department mismatch: You can only submit complaints to your enrolled department.", None
 
-        # Check hostel eligibility if hostel complaint
-        if is_hostel:
+        # Check hostel eligibility if hostel complaint or hostel category
+        is_hostel_category = False
+        if category_id:
+            cat_str = str(category_id).strip().lower()
+            if cat_str == "hostel" or cat_str == "51a1bd37-ede4-4e08-ad85-0fca9e12e5f7":
+                is_hostel_category = True
+            else:
+                try:
+                    cats, _, _ = CacheService.get_categories_and_subcategories()
+                    for c in cats:
+                        if (str(c.get("id")) == str(category_id) or str(c.get("name", "")).strip().lower() == cat_str) and str(c.get("name", "")).strip().lower() == "hostel":
+                            is_hostel_category = True
+                            break
+                except Exception:
+                    pass
+                if not is_hostel_category and client:
+                    try:
+                        c_res = client.table("categories").select("id, name").eq("id", category_id).execute()
+                        if c_res.data and str(c_res.data[0].get("name", "")).strip().lower() == "hostel":
+                            is_hostel_category = True
+                    except Exception:
+                        pass
+        if category_custom and str(category_custom).strip().lower() == "hostel":
+            is_hostel_category = True
+
+        if is_hostel or is_hostel_category:
             if not st_rec.get("is_hostel") or not st_rec.get("is_hostel_approved"):
                 return False, "You must have an approved hostel residency status to submit hostel complaints.", None
 
