@@ -582,6 +582,24 @@ class StudentView:
         init_pri = draft.get("priority", "Low")
         init_anon = bool(draft.get("is_anonymous", False))
         init_hostel = bool(draft.get("is_hostel", False))
+        student_obj = AppState.current_user if (AppState.current_user and str(AppState.current_user.get("id")) == str(self.student_id)) else self.student
+        is_approved_hostel = bool(student_obj.get("is_hostel_approved", False))
+
+        def _is_hostel_cat(raw_cat):
+            if not raw_cat:
+                return False
+            raw_str = str(raw_cat).strip().lower()
+            if raw_str == "hostel":
+                return True
+            for c in self.categories:
+                if str(c.get("id", "")).strip().lower() == raw_str or str(c.get("name", "")).strip().lower() == raw_str:
+                    return str(c.get("name", "")).strip().lower() == "hostel"
+            return False
+
+        if not is_approved_hostel and _is_hostel_cat(init_cat):
+            init_cat = None
+            init_sub = None
+            init_hostel = False
 
         title_field = ft.TextField(
             label="Complaint Title",
@@ -640,7 +658,11 @@ class StudentView:
         desc_field.on_change = on_desc_change
         title_field.on_change = lambda e: save_draft_state()
 
-        cat_options = [ft.dropdown.Option(key=str(c["id"]), text=str(c["name"])) for c in self.categories]
+        cat_options = [
+            ft.dropdown.Option(key=str(c["id"]), text=str(c["name"]))
+            for c in self.categories
+            if is_approved_hostel or str(c.get("name", "")).strip().lower() != "hostel"
+        ]
 
         custom_cat_field = ft.TextField(
             label="Specify Custom Category / Subcategory (Compulsory)",
@@ -847,7 +869,7 @@ class StudentView:
         )
         anonymous_checkbox.on_change = lambda e: save_draft_state()
 
-        is_approved_hostel = self.student.get("is_hostel_approved", False)
+        is_approved_hostel = bool(student_obj.get("is_hostel_approved", False))
         hostel_checkbox = ft.Checkbox(
             label="Hostel-related Complaint",
             value=init_hostel if is_approved_hostel else False,
@@ -1066,6 +1088,13 @@ class StudentView:
                 if str(c.get("id")) == str(cat_id) or str(c.get("name")) == str(cat_id):
                     cat_name = str(c.get("name", ""))
                     break
+
+            student_obj = AppState.current_user if (AppState.current_user and str(AppState.current_user.get("id")) == str(self.student_id)) else self.student
+            if cat_name.strip().lower() == "hostel" and not bool(student_obj.get("is_hostel_approved", False)):
+                msg = "You must have an approved hostel residency status to submit hostel complaints."
+                show_alert(msg, is_error=True)
+                show_feedback_message(self.page, msg, is_error=True)
+                return
 
             subcat_ctrl = getattr(self, "subcategory_dropdown", None) or subcat_holder.content
             selected_subcat = subcat_ctrl.value if subcat_ctrl else None
