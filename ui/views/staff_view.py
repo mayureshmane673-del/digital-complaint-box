@@ -1906,6 +1906,7 @@ class StaffView:
             def approve_req(ev, r_id=rid):
                 ok, msg = HostelService.review_hostel_request(self.role, self.staff_id, r_id, action="Approve")
                 show_feedback_message(self.page, msg, is_error=not ok)
+                self.invalidate_tab_cache(1)
                 self._switch_view(1)
 
             def deny_dialog(ev, r_id=rid):
@@ -1915,8 +1916,7 @@ class StaffView:
                     dense=True,
                     multiline=True,
                     min_lines=2,
-                    max_lines=4,
-                    expand=True
+                    max_lines=4
                 )
                 err_text = ft.Text("", size=12, color="#dc2626", visible=False)
                 confirm_btn = ft.ElevatedButton(
@@ -1929,11 +1929,19 @@ class StaffView:
                     if not val:
                         err_text.value = "Denial reason is strictly mandatory."
                         err_text.visible = True
+                        try:
+                            dlg.update()
+                        except Exception:
+                            pass
                         self.page.update()
                         return
 
                     confirm_btn.disabled = True
                     confirm_btn.content = ft.Text("Denying...")
+                    try:
+                        dlg.update()
+                    except Exception:
+                        pass
                     self.page.update()
 
                     ok, msg = HostelService.review_hostel_request(self.role, self.staff_id, r_id, action="Deny", deny_reason=val)
@@ -1943,10 +1951,15 @@ class StaffView:
                     if ok:
                         show_feedback_message(self.page, msg, is_error=False)
                         close_dialog(self.page, dlg)
+                        self.invalidate_tab_cache(1)
                         self._switch_view(1)
                     else:
                         err_text.value = msg
                         err_text.visible = True
+                        try:
+                            dlg.update()
+                        except Exception:
+                            pass
                         self.page.update()
 
                 confirm_btn.on_click = do_deny
