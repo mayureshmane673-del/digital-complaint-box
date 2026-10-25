@@ -13,6 +13,6 @@ services:
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: APP_SECRET_KEY
-        value: college-complaint-box-production-secure-key-2026
+        sync: false
       - key: PYTHON_VERSION
         value: 3.13.2

@@ -52,7 +52,7 @@ D:\complent box\
 │   │   ├── 003_rls.sql            # Supabase Row Level Security policies
 │   │   ├── 004_storage.sql        # Storage bucket configuration & policies
 │   │   ├── 005_functions.sql      # Triggers, auto-priority, 90-day cleaner, realtime
-│   │   ├── 006_seed.sql           # Departments, categories, locations, Pass@123 hashes
+│   │   ├── 006_seed.sql           # Departments, categories, locations, initial security code hashes
 │   │   └── all_migrations.sql     # Consolidated SQL file for Supabase SQL Editor
 │   ├── supabase_client.py         # Resilient Supabase client with auth session & query builders
 │   └── migration_runner.py        # Migration verification and automation tool
@@ -125,19 +125,19 @@ pip install -r requirements.txt
 ```
 
 ### Step 4: Configure Environment Variables
-Verify `.env` has the provided Supabase project credentials:
+Verify `.env` has your Supabase project credentials:
 ```ini
-SUPABASE_URL=https://trncsmuwxfljkhckoyra.supabase.co
-SUPABASE_PUBLISHABLE_KEY=sb_publishable_beZbQfSIK54uypoJ18WnNw_XqgobOnQ
+SUPABASE_URL=YOUR_SUPABASE_URL
+SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
 
 # Optional: Supabase Service Role Key (Loaded ONLY on secure server/backend operations)
-SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SUPABASE_SERVICE_ROLE_KEY
 
 # Optional: Direct PostgreSQL connection string for automated migrations
 DATABASE_URL=
 
 # App Security Settings
-APP_SECRET_KEY=college-complaint-box-production-secure-key-2026
+APP_SECRET_KEY=YOUR_APP_SECRET_KEY
 MAX_FAILED_LOGIN_ATTEMPTS=5
 STORAGE_BUCKET=complaint-attachments
 ```
@@ -148,7 +148,7 @@ STORAGE_BUCKET=complaint-attachments
 
 ### Executing Migrations in Supabase:
 1. Open your Supabase Dashboard:
-   `https://supabase.com/dashboard/project/trncsmuwxfljkhckoyra`
+   `https://supabase.com/dashboard/project/YOUR_PROJECT_ID`
 2. In the left navigation sidebar, click on **SQL Editor**.
 3. Click **New Query**.
 4. Open the consolidated file on your disk:
@@ -198,11 +198,12 @@ All 23 test suites will run, verifying:
 
 ---
 
-## 8. Initial Staff Security Codes & Default Credentials
+## 8. Staff Security Codes & Credentials Administration
 
-For initial testing and setup, staff security codes have been pre-seeded into the database using secure bcrypt hashing for:
+After initial database setup, the institutional administrator must configure and assign unique staff security codes for each role and department:
 
-- **Initial Staff Security Code**: `Pass@123`
+> [!IMPORTANT]
+> Change all default security codes and passwords immediately after initial deployment.
 
 ### Security Code Rules:
 - **HOD**: Can update own HOD code and the shared Coordinator code for their department.
