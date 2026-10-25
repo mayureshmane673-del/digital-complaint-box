@@ -301,12 +301,47 @@ def create_bottom_nav_bar(
             ft.NavigationBarDestination(icon=ft.Icons.BAR_CHART_OUTLINED, selected_icon=ft.Icons.BAR_CHART, label="Reports"),
             ft.NavigationBarDestination(icon=ft.Icons.MANAGE_ACCOUNTS_OUTLINED, selected_icon=ft.Icons.MANAGE_ACCOUNTS, label="Account"),
         ]
-    else:
-        # Default staff bottom bar
+    elif role in (UserRole.HOD.value, UserRole.GENERAL_HOD.value):
         destinations = [
             ft.NavigationBarDestination(icon=ft.Icons.DASHBOARD_OUTLINED, selected_icon=ft.Icons.DASHBOARD, label="Home"),
             ft.NavigationBarDestination(icon=ft.Icons.LIST_ALT_OUTLINED, selected_icon=ft.Icons.LIST_ALT, label="Complaints"),
             ft.NavigationBarDestination(icon=ft.Icons.DYNAMIC_FEED_OUTLINED, selected_icon=ft.Icons.DYNAMIC_FEED, label="Groups"),
+            ft.NavigationBarDestination(icon=ft.Icons.PASSWORD_OUTLINED, selected_icon=ft.Icons.PASSWORD, label="Security"),
+            ft.NavigationBarDestination(icon=ft.Icons.ANALYTICS_OUTLINED, selected_icon=ft.Icons.ANALYTICS, label="Reports"),
+            ft.NavigationBarDestination(icon=ft.Icons.MANAGE_ACCOUNTS_OUTLINED, selected_icon=ft.Icons.MANAGE_ACCOUNTS, label="Account"),
+        ]
+    elif role == UserRole.LIBRARY_INCHARGE.value:
+        destinations = [
+            ft.NavigationBarDestination(icon=ft.Icons.DASHBOARD_OUTLINED, selected_icon=ft.Icons.DASHBOARD, label="Home"),
+            ft.NavigationBarDestination(icon=ft.Icons.LOCAL_LIBRARY_OUTLINED, selected_icon=ft.Icons.LOCAL_LIBRARY, label="Complaints"),
+            ft.NavigationBarDestination(icon=ft.Icons.DYNAMIC_FEED_OUTLINED, selected_icon=ft.Icons.DYNAMIC_FEED, label="Groups"),
+            ft.NavigationBarDestination(icon=ft.Icons.PASSWORD_OUTLINED, selected_icon=ft.Icons.PASSWORD, label="Security"),
+            ft.NavigationBarDestination(icon=ft.Icons.BAR_CHART_OUTLINED, selected_icon=ft.Icons.BAR_CHART, label="Reports"),
+            ft.NavigationBarDestination(icon=ft.Icons.MANAGE_ACCOUNTS_OUTLINED, selected_icon=ft.Icons.MANAGE_ACCOUNTS, label="Account"),
+        ]
+    elif role == UserRole.HOSTEL_INCHARGE.value:
+        destinations = [
+            ft.NavigationBarDestination(icon=ft.Icons.DASHBOARD_OUTLINED, selected_icon=ft.Icons.DASHBOARD, label="Home"),
+            ft.NavigationBarDestination(icon=ft.Icons.HOW_TO_REG_OUTLINED, selected_icon=ft.Icons.HOW_TO_REG, label="Requests"),
+            ft.NavigationBarDestination(icon=ft.Icons.HOTEL_OUTLINED, selected_icon=ft.Icons.HOTEL, label="Complaints"),
+            ft.NavigationBarDestination(icon=ft.Icons.DYNAMIC_FEED_OUTLINED, selected_icon=ft.Icons.DYNAMIC_FEED, label="Groups"),
+            ft.NavigationBarDestination(icon=ft.Icons.PASSWORD_OUTLINED, selected_icon=ft.Icons.PASSWORD, label="Security"),
+            ft.NavigationBarDestination(icon=ft.Icons.MANAGE_ACCOUNTS_OUTLINED, selected_icon=ft.Icons.MANAGE_ACCOUNTS, label="Account"),
+        ]
+    elif role == UserRole.PRINCIPAL.value:
+        destinations = [
+            ft.NavigationBarDestination(icon=ft.Icons.DASHBOARD_OUTLINED, selected_icon=ft.Icons.DASHBOARD, label="Overview"),
+            ft.NavigationBarDestination(icon=ft.Icons.LIST_ALT_OUTLINED, selected_icon=ft.Icons.LIST_ALT, label="Complaints"),
+            ft.NavigationBarDestination(icon=ft.Icons.ANALYTICS_OUTLINED, selected_icon=ft.Icons.ANALYTICS, label="Analytics"),
+            ft.NavigationBarDestination(icon=ft.Icons.LOCATION_CITY_OUTLINED, selected_icon=ft.Icons.LOCATION_CITY, label="Locations"),
+            ft.NavigationBarDestination(icon=ft.Icons.ADMIN_PANEL_SETTINGS_OUTLINED, selected_icon=ft.Icons.ADMIN_PANEL_SETTINGS, label="Security"),
+            ft.NavigationBarDestination(icon=ft.Icons.MANAGE_ACCOUNTS_OUTLINED, selected_icon=ft.Icons.MANAGE_ACCOUNTS, label="Account"),
+        ]
+    else:
+        # Default staff bottom bar without groups
+        destinations = [
+            ft.NavigationBarDestination(icon=ft.Icons.DASHBOARD_OUTLINED, selected_icon=ft.Icons.DASHBOARD, label="Home"),
+            ft.NavigationBarDestination(icon=ft.Icons.LIST_ALT_OUTLINED, selected_icon=ft.Icons.LIST_ALT, label="Complaints"),
             ft.NavigationBarDestination(icon=ft.Icons.ANALYTICS_OUTLINED, selected_icon=ft.Icons.ANALYTICS, label="Reports"),
             ft.NavigationBarDestination(icon=ft.Icons.MANAGE_ACCOUNTS_OUTLINED, selected_icon=ft.Icons.MANAGE_ACCOUNTS, label="Account"),
         ]

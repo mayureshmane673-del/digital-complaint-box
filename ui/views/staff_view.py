@@ -795,6 +795,22 @@ class StaffView:
         is_dark = AppState.is_dark_mode
         colors = get_theme_colors(is_dark)
 
+        if self.role == UserRole.PRINCIPAL.value:
+            return ft.Container(
+                content=ft.Column(
+                    controls=[
+                        ft.Icon(ft.Icons.BLOCK, size=40, color=colors["danger"]),
+                        ft.Text("Access Denied", size=18, weight=ft.FontWeight.BOLD, color=colors["danger"]),
+                        ft.Text("Principal is not authorized to access Issue Groups.", size=13, color=colors["text_muted"])
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=SPACING["sm"]
+                ),
+                alignment=ft.Alignment.CENTER,
+                padding=SPACING["xl"],
+                expand=True
+            )
+
         groups = IssueGroupService.get_department_groups(self.department_id, role=self.role)
 
         def make_open_complaint_handler(comp_id: int):
@@ -836,41 +852,28 @@ class StaffView:
                 m_date = format_datetime(m.get("created_at")) if m.get("created_at") else ""
                 is_anon = m.get("is_anonymous", False)
 
-                submitter_chips = []
-                if is_anon:
-                    submitter_chips.append(
-                        ft.Container(
-                            content=ft.Row(
-                                controls=[
-                                    ft.Icon(ft.Icons.VISIBILITY_OFF, size=12, color=colors["text_muted"]),
-                                    ft.Text("Anonymous Student", size=11, weight=ft.FontWeight.W_600, color=colors["text_muted"])
-                                ],
-                                spacing=4,
-                                tight=True
-                            ),
-                            bgcolor=colors["surface_variant"],
-                            border_radius=RADII["sm"],
-                            padding=ft.padding.symmetric(horizontal=8, vertical=4)
-                        )
-                    )
+                st_info = m.get("student_info") or m.get("student_name")
+                if is_anon or not st_info:
+                    st_display = "Anonymous Student"
+                    is_anon = True
                 else:
-                    st_info = m.get("student_info") or (f"Student #{m.get('student_id')}" if m.get("student_id") else "")
-                    if st_info:
-                        submitter_chips.append(
-                            ft.Container(
-                                content=ft.Row(
-                                    controls=[
-                                        ft.Icon(ft.Icons.PERSON_OUTLINE, size=12, color=colors["text_muted"]),
-                                        ft.Text(st_info, size=11, color=colors["text_muted"])
-                                    ],
-                                    spacing=4,
-                                    tight=True
-                                ),
-                                bgcolor=colors["surface_variant"],
-                                border_radius=RADII["sm"],
-                                padding=ft.padding.symmetric(horizontal=8, vertical=4)
-                            )
-                        )
+                    st_display = st_info
+
+                submitter_chips = [
+                    ft.Container(
+                        content=ft.Row(
+                            controls=[
+                                ft.Icon(ft.Icons.VISIBILITY_OFF if is_anon else ft.Icons.PERSON_OUTLINE, size=12, color=colors["text_muted"]),
+                                ft.Text(st_display, size=11, weight=ft.FontWeight.W_600 if is_anon else ft.FontWeight.W_500, color=colors["text_muted"])
+                            ],
+                            spacing=4,
+                            tight=True
+                        ),
+                        bgcolor=colors["surface_variant"],
+                        border_radius=RADII["sm"],
+                        padding=ft.padding.symmetric(horizontal=8, vertical=4)
+                    )
+                ]
 
                 date_chips = []
                 if m_date:
@@ -899,15 +902,15 @@ class StaffView:
                                         ft.Row(
                                             controls=[
                                                 ft.Container(
-                                                    content=ft.Text(f"#{m_cid}", size=12, weight=ft.FontWeight.BOLD, color=colors["primary"]),
+                                                    content=ft.Text(f"#{m_cid}", size=11, weight=ft.FontWeight.BOLD, color=colors["primary"]),
                                                     bgcolor=ft.Colors.with_opacity(0.12, colors["primary"]),
                                                     border_radius=RADII["sm"],
                                                     padding=ft.padding.symmetric(horizontal=SPACING["sm"], vertical=SPACING["xs"])
                                                 ),
-                                                ft.Text(m_title, size=14, weight=ft.FontWeight.BOLD, color=colors["text"], expand=True),
+                                                ft.Text(m_title, size=13, weight=ft.FontWeight.BOLD, color=colors["text"])
                                             ],
-                                            spacing=8,
-                                            expand=True,
+                                            spacing=SPACING["xs"],
+                                            wrap=True,
                                             vertical_alignment=ft.CrossAxisAlignment.CENTER
                                         ),
                                         ft.Row(
@@ -915,11 +918,12 @@ class StaffView:
                                                 StatusBadge(m_st, is_dark=is_dark),
                                                 PriorityBadge(m_pri, is_dark=is_dark)
                                             ],
-                                            spacing=6,
+                                            spacing=SPACING["xs"],
                                             tight=True
                                         )
                                     ],
                                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                     wrap=True
                                 ),
                                 ft.Text(m_desc, size=13, color=colors["text"]),
@@ -931,7 +935,7 @@ class StaffView:
                                                 *submitter_chips,
                                                 *date_chips,
                                             ],
-                                            spacing=8,
+                                            spacing=SPACING["xs"],
                                             wrap=True
                                         ),
                                         ft.ElevatedButton(
@@ -951,13 +955,13 @@ class StaffView:
                                     wrap=True
                                 )
                             ],
-                            spacing=8
+                            spacing=SPACING["sm"]
                         ),
                         bgcolor=colors["surface_variant"],
                         border=ft.Border.all(1, colors["border"]),
                         border_radius=RADII["md"],
                         padding=SPACING["md"],
-                        margin=ft.margin.only(bottom=8)
+                        margin=ft.margin.only(bottom=SPACING["xs"])
                     )
                 )
 
@@ -968,7 +972,7 @@ class StaffView:
                     ft.Text("Individual Complaints (Statuses remain independent):", size=12, color=colors["text_muted"]),
                     *member_rows
                 ],
-                spacing=8,
+                spacing=SPACING["sm"],
                 visible=is_initially_open
             )
 
@@ -987,24 +991,23 @@ class StaffView:
                                 controls=[
                                     ft.Row(
                                         controls=[
-                                            ft.Text(group_title, size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                                            ft.Text(group_title, size=15, weight=ft.FontWeight.BOLD, color=colors["text"]),
                                             ft.Container(
-                                                content=ft.Text(f"+{dup_count} Similar Complaints", size=12, weight=ft.FontWeight.BOLD, color="#b45309"),
-                                                bgcolor="#78350f" if is_dark else "#fef3c7",
-                                                border_radius=20,
-                                                padding=ft.padding.symmetric(horizontal=10, vertical=4)
+                                                content=ft.Text(f"+{dup_count} Similar Complaints", size=11, weight=ft.FontWeight.BOLD, color=colors["warning"]),
+                                                bgcolor=ft.Colors.with_opacity(0.12, colors["warning"]),
+                                                border_radius=RADII["pill"],
+                                                padding=ft.padding.symmetric(horizontal=8, vertical=3)
                                             )
                                         ],
-                                        spacing=8,
-                                        wrap=True,
-                                        expand=True
+                                        spacing=SPACING["xs"],
+                                        wrap=True
                                     ),
                                     ft.Row(
                                         controls=[
-                                            ft.Text(f"Group Status: {status}", size=12, weight=ft.FontWeight.W_600, color=STATUS_COLORS.get(status, "#6b7280")),
+                                            ft.Text(f"Group Status: {status}", size=12, weight=ft.FontWeight.W_600, color=STATUS_COLORS.get(status, colors["text_muted"])),
                                             toggle_btn
                                         ],
-                                        spacing=8,
+                                        spacing=SPACING["sm"],
                                         wrap=True
                                     )
                                 ],
@@ -1014,14 +1017,14 @@ class StaffView:
                             ),
                             members_col
                         ],
-                        spacing=8
+                        spacing=SPACING["sm"]
                     ),
                     bgcolor=colors["surface"],
                     border=ft.Border.all(1, colors["border"]),
-                    border_radius=12,
+                    border_radius=RADII["md"],
                     shadow=get_card_shadow(is_dark),
-                    padding=16,
-                    margin=ft.margin.only(bottom=12)
+                    padding=SPACING["md"],
+                    margin=ft.margin.only(bottom=SPACING["sm"])
                 )
             )
 
@@ -1044,7 +1047,7 @@ class StaffView:
             controls=[
                 ft.Row(
                     controls=[
-                        ft.Text("Duplicate Issue Groups", size=22, weight=ft.FontWeight.BOLD, color=colors["text"], expand=True),
+                        ft.Text("Duplicate Issue Groups", size=20, weight=ft.FontWeight.BOLD, color=colors["text"]),
                         ft.IconButton(
                             icon=ft.Icons.REFRESH,
                             tooltip="Refresh Issue Groups",
@@ -1052,13 +1055,14 @@ class StaffView:
                         )
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     wrap=True
                 ),
                 ft.Text("Similar complaints are automatically grouped together (+N) without deleting or merging them.", size=13, color=colors["text_muted"]),
-                ft.Column(controls=group_cards, spacing=8)
+                *group_cards
             ],
             scroll=ft.ScrollMode.AUTO,
-            spacing=14,
+            spacing=SPACING["md"],
             expand=True
         )
 
