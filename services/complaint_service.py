@@ -630,6 +630,7 @@ class ComplaintService:
         department_id: Optional[str] = None,
         filters: Optional[Dict[str, Any]] = None,
         raise_errors: bool = False,
+        exclude_grouped: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Retrieves complaints strictly bounded by 6-role routing matrix:
@@ -753,6 +754,10 @@ class ComplaintService:
                 if is_first_yr or dept_code == "GEN":
                     continue
 
+            # Exclude grouped complaints if requested (staff complaints list)
+            if exclude_grouped and role != UserRole.STUDENT.value and item.get("issue_group_id"):
+                continue
+
             # Enforce anonymous masking: staff NEVER sees student details
             if item.get("is_anonymous"):
                 item["student_id"] = None
@@ -820,3 +825,32 @@ class ComplaintService:
         except Exception:
             return []
 
+    @classmethod
+    def get_complaint_by_id(cls, complaint_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves a single complaint by ID with all standard joins:
+        departments, categories, subcategories, locations, students.
+        Enforces anonymous masking for student privacy.
+        """
+        try:
+            complaint_id = int(complaint_id)
+        except (ValueError, TypeError):
+            return None
+
+        client = _get_client()
+        try:
+            res = client.table("complaints").select(
+                "*, departments(code, name), categories(name), subcategories(name), locations(name), students(year, roll_number, full_name)"
+            ).eq("complaint_id", complaint_id).execute()
+
+            if not res.data:
+                return None
+
+            item = res.data[0]
+            if item.get("is_anonymous"):
+                item["student_id"] = None
+                item["student_info"] = "Anonymous Student"
+                item["students"] = None
+            return item
+        except Exception:
+            return None

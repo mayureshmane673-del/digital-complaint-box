@@ -56,6 +56,7 @@ class StaffView:
         self.department_code = staff.get("departments", {}).get("code") if isinstance(staff.get("departments"), dict) else staff.get("department_code")
         self.selected_tab_index = 0
         self.cached_complaints = None
+        self.cached_list_complaints = None
         self.cached_metrics = None
         self.cached_dept_breakdown = None
         self.categories = []
@@ -75,6 +76,19 @@ class StaffView:
             self._tab_cache.clear()
         else:
             self._tab_cache.pop(index, None)
+
+    def _load_staff_complaints_list(self, force: bool = False) -> List[Dict[str, Any]]:
+        """Loads complaints for the staff complaints list tab, excluding grouped complaints."""
+        if self.cached_list_complaints is not None and not force:
+            return self.cached_list_complaints
+        self.cached_list_complaints = ComplaintService.get_complaints_for_user(
+            self.role,
+            self.staff_id,
+            self.department_id,
+            raise_errors=True,
+            exclude_grouped=True,
+        ) or []
+        return self.cached_list_complaints
 
     def _load_staff_complaints(self, force: bool = False) -> List[Dict[str, Any]]:
         """Share one department-scoped complaint request across dashboard and list."""
@@ -537,7 +551,7 @@ class StaffView:
             self.page.update()
 
         def load_data(force: bool = False):
-            return self._load_staff_complaints(force=force)
+            return self._load_staff_complaints_list(force=force)
 
         def reset_filters(e=None):
             search_field.value = ""
@@ -553,7 +567,7 @@ class StaffView:
         def refresh_list(force_reload: bool = False):
             if complaints_list_loading[0]:
                 return
-            if force_reload or self.cached_complaints is None:
+            if force_reload or self.cached_list_complaints is None:
                 complaints_list_loading[0] = True
                 complaints_container.controls = [
                     ft.Container(
@@ -783,6 +797,26 @@ class StaffView:
 
         groups = IssueGroupService.get_department_groups(self.department_id, role=self.role)
 
+        def make_open_complaint_handler(comp_id: int):
+            def _handler(e):
+                full_comp = ComplaintService.get_complaint_by_id(comp_id)
+                if full_comp:
+                    self._open_detail_dialog(full_comp)
+                else:
+                    show_feedback_message(self.page, f"Complaint #{comp_id} could not be loaded.", is_error=True)
+            return _handler
+
+        def make_toggle_handler(members_col, toggle_btn, count: int):
+            def _toggle(e):
+                members_col.visible = not members_col.visible
+                toggle_btn.text = "Hide Complaints" if members_col.visible else f"Open Group ({count})"
+                toggle_btn.icon = ft.Icons.KEYBOARD_ARROW_UP if members_col.visible else ft.Icons.KEYBOARD_ARROW_DOWN
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+            return _toggle
+
         group_cards = []
         for g in groups:
             gid = g.get("id")
@@ -790,24 +824,160 @@ class StaffView:
             dup_count = g.get("duplicate_count", 0)
             status = g.get("status", "Active")
             members = g.get("members", [])
+            group_title = g.get("display_title") or g.get("title") or f"Issue Group #{parent_cid}"
 
             member_rows = []
             for m in members:
-                mid = m.get("id")
                 m_cid = m.get("complaint_id")
+                m_title = m.get("title") or f"Complaint #{m_cid}"
+                m_desc = m.get("description") or "No description provided."
                 m_st = m.get("status", "Pending")
                 m_pri = m.get("priority", "Low")
+                m_date = format_datetime(m.get("created_at")) if m.get("created_at") else ""
+                is_anon = m.get("is_anonymous", False)
+
+                submitter_chips = []
+                if is_anon:
+                    submitter_chips.append(
+                        ft.Container(
+                            content=ft.Row(
+                                controls=[
+                                    ft.Icon(ft.Icons.VISIBILITY_OFF, size=12, color=colors["text_muted"]),
+                                    ft.Text("Anonymous Student", size=11, weight=ft.FontWeight.W_600, color=colors["text_muted"])
+                                ],
+                                spacing=4,
+                                tight=True
+                            ),
+                            bgcolor=colors["surface_variant"],
+                            border_radius=RADII["sm"],
+                            padding=ft.padding.symmetric(horizontal=8, vertical=4)
+                        )
+                    )
+                else:
+                    st_info = m.get("student_info") or (f"Student #{m.get('student_id')}" if m.get("student_id") else "")
+                    if st_info:
+                        submitter_chips.append(
+                            ft.Container(
+                                content=ft.Row(
+                                    controls=[
+                                        ft.Icon(ft.Icons.PERSON_OUTLINE, size=12, color=colors["text_muted"]),
+                                        ft.Text(st_info, size=11, color=colors["text_muted"])
+                                    ],
+                                    spacing=4,
+                                    tight=True
+                                ),
+                                bgcolor=colors["surface_variant"],
+                                border_radius=RADII["sm"],
+                                padding=ft.padding.symmetric(horizontal=8, vertical=4)
+                            )
+                        )
+
+                date_chips = []
+                if m_date:
+                    date_chips.append(
+                        ft.Container(
+                            content=ft.Row(
+                                controls=[
+                                    ft.Icon(ft.Icons.CALENDAR_TODAY_OUTLINED, size=11, color=colors["text_muted"]),
+                                    ft.Text(m_date, size=11, color=colors["text_muted"])
+                                ],
+                                spacing=4,
+                                tight=True
+                            ),
+                            bgcolor=colors["surface_variant"],
+                            border_radius=RADII["sm"],
+                            padding=ft.padding.symmetric(horizontal=8, vertical=4)
+                        )
+                    )
+
                 member_rows.append(
-                    ft.Row(
-                        controls=[
-                            ft.Text(f"#{m_cid}", weight=ft.FontWeight.BOLD, size=13, color=colors["primary"]),
-                            StatusBadge(m_st, is_dark=is_dark),
-                            PriorityBadge(m_pri, is_dark=is_dark)
-                        ],
-                        spacing=8,
-                        wrap=True
+                    ft.Container(
+                        content=ft.Column(
+                            controls=[
+                                ft.Row(
+                                    controls=[
+                                        ft.Row(
+                                            controls=[
+                                                ft.Container(
+                                                    content=ft.Text(f"#{m_cid}", size=12, weight=ft.FontWeight.BOLD, color=colors["primary"]),
+                                                    bgcolor=ft.Colors.with_opacity(0.12, colors["primary"]),
+                                                    border_radius=RADII["sm"],
+                                                    padding=ft.padding.symmetric(horizontal=SPACING["sm"], vertical=SPACING["xs"])
+                                                ),
+                                                ft.Text(m_title, size=14, weight=ft.FontWeight.BOLD, color=colors["text"], expand=True),
+                                            ],
+                                            spacing=8,
+                                            expand=True,
+                                            vertical_alignment=ft.CrossAxisAlignment.CENTER
+                                        ),
+                                        ft.Row(
+                                            controls=[
+                                                StatusBadge(m_st, is_dark=is_dark),
+                                                PriorityBadge(m_pri, is_dark=is_dark)
+                                            ],
+                                            spacing=6,
+                                            tight=True
+                                        )
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    wrap=True
+                                ),
+                                ft.Text(m_desc, size=13, color=colors["text"]),
+                                ft.Divider(height=1, color=colors["border"]),
+                                ft.Row(
+                                    controls=[
+                                        ft.Row(
+                                            controls=[
+                                                *submitter_chips,
+                                                *date_chips,
+                                            ],
+                                            spacing=8,
+                                            wrap=True
+                                        ),
+                                        ft.ElevatedButton(
+                                            content=ft.Row(
+                                                controls=[
+                                                    ft.Text("View Details", size=12, weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
+                                                    ft.Icon(ft.Icons.ARROW_FORWARD, size=14, color=ft.Colors.WHITE)
+                                                ],
+                                                spacing=4
+                                            ),
+                                            style=get_button_style(is_dark, size="sm"),
+                                            on_click=make_open_complaint_handler(m_cid)
+                                        )
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                    wrap=True
+                                )
+                            ],
+                            spacing=8
+                        ),
+                        bgcolor=colors["surface_variant"],
+                        border=ft.Border.all(1, colors["border"]),
+                        border_radius=RADII["md"],
+                        padding=SPACING["md"],
+                        margin=ft.margin.only(bottom=8)
                     )
                 )
+
+            # Auto-expand if single group, otherwise collapsed
+            is_initially_open = (len(groups) == 1)
+            members_col = ft.Column(
+                controls=[
+                    ft.Text("Individual Complaints (Statuses remain independent):", size=12, color=colors["text_muted"]),
+                    *member_rows
+                ],
+                spacing=8,
+                visible=is_initially_open
+            )
+
+            toggle_btn = ft.OutlinedButton(
+                "Hide Complaints" if is_initially_open else f"Open Group ({len(members)})",
+                icon=ft.Icons.KEYBOARD_ARROW_UP if is_initially_open else ft.Icons.KEYBOARD_ARROW_DOWN,
+                style=get_button_style(is_dark, variant="outline", size="sm")
+            )
+            toggle_btn.on_click = make_toggle_handler(members_col, toggle_btn, len(members))
 
             group_cards.append(
                 ft.Container(
@@ -817,7 +987,7 @@ class StaffView:
                                 controls=[
                                     ft.Row(
                                         controls=[
-                                            ft.Text(f"Parent Issue #{parent_cid}", size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                                            ft.Text(group_title, size=16, weight=ft.FontWeight.BOLD, color=colors["text"]),
                                             ft.Container(
                                                 content=ft.Text(f"+{dup_count} Similar Complaints", size=12, weight=ft.FontWeight.BOLD, color="#b45309"),
                                                 bgcolor="#78350f" if is_dark else "#fef3c7",
@@ -826,15 +996,23 @@ class StaffView:
                                             )
                                         ],
                                         spacing=8,
-                                        wrap=True
+                                        wrap=True,
+                                        expand=True
                                     ),
-                                    ft.Text(f"Group Status: {status}", size=12, weight=ft.FontWeight.W_600, color=STATUS_COLORS.get(status, "#6b7280"))
+                                    ft.Row(
+                                        controls=[
+                                            ft.Text(f"Group Status: {status}", size=12, weight=ft.FontWeight.W_600, color=STATUS_COLORS.get(status, "#6b7280")),
+                                            toggle_btn
+                                        ],
+                                        spacing=8,
+                                        wrap=True
+                                    )
                                 ],
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                 wrap=True
                             ),
-                            ft.Text("Individual Complaints (Statuses remain independent):", size=12, color=colors["text_muted"]),
-                            ft.Column(controls=member_rows)
+                            members_col
                         ],
                         spacing=8
                     ),
@@ -857,9 +1035,25 @@ class StaffView:
                 )
             )
 
+        def on_refresh_click(_):
+            CacheService.invalidate_issue_groups()
+            self.invalidate_tab_cache(self.selected_tab_index)
+            self._switch_view(self.selected_tab_index)
+
         return ft.Column(
             controls=[
-                ft.Text("Duplicate Issue Groups", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                ft.Row(
+                    controls=[
+                        ft.Text("Duplicate Issue Groups", size=22, weight=ft.FontWeight.BOLD, color=colors["text"], expand=True),
+                        ft.IconButton(
+                            icon=ft.Icons.REFRESH,
+                            tooltip="Refresh Issue Groups",
+                            on_click=on_refresh_click
+                        )
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    wrap=True
+                ),
                 ft.Text("Similar complaints are automatically grouped together (+N) without deleting or merging them.", size=13, color=colors["text_muted"]),
                 ft.Column(controls=group_cards, spacing=8)
             ],
@@ -2627,6 +2821,8 @@ class StaffView:
     def _open_detail_dialog(self, complaint: Dict[str, Any]):
         def on_updated():
             self.cached_complaints = None
+            self.cached_list_complaints = None
+            self.invalidate_tab_cache()
             self._switch_view(self.selected_tab_index)
 
         show_complaint_detail_dialog(

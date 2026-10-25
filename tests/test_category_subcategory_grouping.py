@@ -352,3 +352,162 @@ def test_issue_group_service_includes_description_and_created_at():
         assert m2["created_at"] == "2026-10-25T11:00:00Z"
         assert m2["student_info"] == "Anonymous Student"
         assert m2.get("student_id") is None
+
+
+def test_staff_complaints_list_excludes_grouped_complaints():
+    client_mock = MagicMock()
+    complaints_table = MagicMock()
+    client_mock.table.return_value = complaints_table
+
+    for method in ("select", "eq", "or_", "in_", "order"):
+        getattr(complaints_table, method).return_value = complaints_table
+
+    sample_complaints = [
+        {
+            "complaint_id": 601,
+            "title": "Ungrouped issue",
+            "department_id": "dept-cse",
+            "issue_group_id": None,
+            "is_hostel": False,
+            "is_deleted": False,
+            "categories": {"name": "Lab"},
+            "students": {"year": "SE"},
+            "departments": {"code": "CSE"}
+        },
+        {
+            "complaint_id": 602,
+            "title": "Grouped issue 1",
+            "department_id": "dept-cse",
+            "issue_group_id": "grp-abc-123",
+            "is_hostel": False,
+            "is_deleted": False,
+            "categories": {"name": "Lab"},
+            "students": {"year": "SE"},
+            "departments": {"code": "CSE"}
+        }
+    ]
+
+    complaints_table.execute.return_value = MagicMock(data=sample_complaints)
+
+    with patch("services.complaint_service._get_client", return_value=client_mock):
+        results = ComplaintService.get_complaints_for_user(
+            role="HOD",
+            user_id="staff-1",
+            department_id="dept-cse",
+            exclude_grouped=True
+        )
+        assert len(results) == 1
+        assert results[0]["complaint_id"] == 601
+        assert results[0]["issue_group_id"] is None
+
+
+def test_student_complaints_list_includes_grouped_complaints():
+    client_mock = MagicMock()
+    complaints_table = MagicMock()
+    anon_table = MagicMock()
+
+    def router(name):
+        if name == "anonymous_complaint_owners":
+            return anon_table
+        return complaints_table
+
+    client_mock.table.side_effect = router
+
+    for method in ("select", "eq", "or_", "in_", "order"):
+        getattr(complaints_table, method).return_value = complaints_table
+        getattr(anon_table, method).return_value = anon_table
+
+    anon_table.execute.return_value = MagicMock(data=[])
+
+    sample_complaints = [
+        {
+            "complaint_id": 701,
+            "title": "Student issue in group",
+            "issue_group_id": "grp-xyz-789",
+            "student_id": "student-1",
+            "is_deleted": False
+        }
+    ]
+    complaints_table.execute.return_value = MagicMock(data=sample_complaints)
+
+    with patch("services.complaint_service._get_client", return_value=client_mock):
+        results = ComplaintService.get_complaints_for_user(
+            role="Student",
+            user_id="student-1",
+            exclude_grouped=True
+        )
+        assert len(results) == 1
+        assert results[0]["complaint_id"] == 701
+        assert results[0]["issue_group_id"] == "grp-xyz-789"
+
+
+def test_default_get_complaints_for_user_unchanged():
+    client_mock = MagicMock()
+    complaints_table = MagicMock()
+    client_mock.table.return_value = complaints_table
+
+    for method in ("select", "eq", "or_", "in_", "order"):
+        getattr(complaints_table, method).return_value = complaints_table
+
+    sample_complaints = [
+        {
+            "complaint_id": 801,
+            "title": "Ungrouped",
+            "department_id": "dept-cse",
+            "issue_group_id": None,
+            "is_hostel": False,
+            "is_deleted": False,
+            "categories": {"name": "Academic"},
+            "students": {"year": "TE"},
+            "departments": {"code": "CSE"}
+        },
+        {
+            "complaint_id": 802,
+            "title": "Grouped",
+            "department_id": "dept-cse",
+            "issue_group_id": "grp-default-999",
+            "is_hostel": False,
+            "is_deleted": False,
+            "categories": {"name": "Academic"},
+            "students": {"year": "TE"},
+            "departments": {"code": "CSE"}
+        }
+    ]
+    complaints_table.execute.return_value = MagicMock(data=sample_complaints)
+
+    with patch("services.complaint_service._get_client", return_value=client_mock):
+        results = ComplaintService.get_complaints_for_user(
+            role="HOD",
+            user_id="staff-1",
+            department_id="dept-cse"
+        )
+        assert len(results) == 2
+        cids = [r["complaint_id"] for r in results]
+        assert 801 in cids
+        assert 802 in cids
+
+
+def test_get_complaint_by_id_masks_anonymous_student():
+    client_mock = MagicMock()
+    complaints_table = MagicMock()
+    client_mock.table.return_value = complaints_table
+
+    for method in ("select", "eq"):
+        getattr(complaints_table, method).return_value = complaints_table
+
+    sample = {
+        "complaint_id": 901,
+        "title": "Anonymous complaint",
+        "is_anonymous": True,
+        "student_id": "real-student-uuid",
+        "students": {"year": "BE", "roll_number": "2024001", "full_name": "Secret Student"}
+    }
+    complaints_table.execute.return_value = MagicMock(data=[sample])
+
+    with patch("services.complaint_service._get_client", return_value=client_mock):
+        item = ComplaintService.get_complaint_by_id(901)
+        assert item is not None
+        assert item["complaint_id"] == 901
+        assert item["student_id"] is None
+        assert item["student_info"] == "Anonymous Student"
+        assert item["students"] is None
