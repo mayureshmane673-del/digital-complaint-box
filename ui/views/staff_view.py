@@ -2536,7 +2536,7 @@ class StaffView:
         client = get_supabase_client()
         locations = client.table("locations").select("*").order("name").execute().data or []
 
-        new_loc_field = ft.TextField(**get_input_style(is_dark), label="Add New Campus Location", dense=True, expand=True)
+        new_loc_field = ft.TextField(**get_input_style(is_dark), label="Add New Campus Location", dense=True)
         add_loc_btn = ft.ElevatedButton(
             content=ft.Text("Add Location"),
             icon=ft.Icons.ADD,
@@ -2574,16 +2574,28 @@ class StaffView:
                 client.table("locations").update({"is_active": not cur_act}).eq("id", l_id).execute()
                 self._switch_view(3)
 
+            status_text_color = colors["success"] if is_act else colors["danger"]
+            status_bg_color = (
+                ("#14532d" if is_act else "#450a0a")
+                if is_dark
+                else ("#dcfce7" if is_act else "#fee2e2")
+            )
+
             loc_rows.append(
                 ft.DataRow(
                     cells=[
                         ft.DataCell(ft.Text(lname, weight=ft.FontWeight.BOLD, color=colors["text"])),
                         ft.DataCell(
                             ft.Container(
-                                content=ft.Text("Active" if is_act else "Deactivated", size=11, weight=ft.FontWeight.W_600, color="#059669" if is_act else "#991b1b"),
-                                bgcolor="#14532d" if (is_dark and is_act) else ("#450a0a" if is_dark else ("#dcfce7" if is_act else "#fee2e2")),
-                                border_radius=8,
-                                padding=ft.padding.symmetric(horizontal=8, vertical=2)
+                                content=ft.Text(
+                                    "Active" if is_act else "Deactivated",
+                                    size=11,
+                                    weight=ft.FontWeight.W_600,
+                                    color=status_text_color,
+                                ),
+                                bgcolor=status_bg_color,
+                                border_radius=RADII["sm"],
+                                padding=ft.padding.symmetric(horizontal=SPACING["sm"], vertical=SPACING["xs"]),
                             )
                         ),
                         ft.DataCell(ft.TextButton("Deactivate" if is_act else "Reactivate", on_click=toggle_loc))
@@ -2605,15 +2617,25 @@ class StaffView:
             scroll=ft.ScrollMode.AUTO
         )
 
+        add_loc_form = ft.ResponsiveRow(
+            controls=[
+                ft.Container(new_loc_field, col={"xs": 12, "sm": 8, "md": 9}),
+                ft.Container(add_loc_btn, col={"xs": 12, "sm": 4, "md": 3}, alignment=ft.alignment.center_left),
+            ],
+            spacing=SPACING["sm"],
+            run_spacing=SPACING["sm"],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
         return ft.Column(
             controls=[
-                ft.Text("Campus Location Management", size=22, weight=ft.FontWeight.BOLD, color=colors["text"]),
-                ft.Row(controls=[new_loc_field, add_loc_btn], wrap=True),
+                ft.Text("Campus Location Management", size=20, weight=ft.FontWeight.BOLD, color=colors["text"]),
+                add_loc_form,
                 ft.Divider(color=colors["border"]),
                 scrollable_loc_table
             ],
             scroll=ft.ScrollMode.AUTO,
-            spacing=16,
+            spacing=SPACING["md"],
             expand=True
         )
 
