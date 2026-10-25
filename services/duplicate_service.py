@@ -225,3 +225,69 @@ class DuplicateService:
         manual_lvl = PRIORITY_LEVELS.get(manual_priority, 1)
         min_lvl = PRIORITY_LEVELS.get(auto_minimum_priority, 1)
         return manual_lvl >= min_lvl
+
+    @classmethod
+    def find_category_subcategory_matches(
+        cls,
+        target_complaint: Dict[str, Any],
+        candidate_complaints: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Deterministic Category + Subcategory matching:
+        - Hostel complaints: group within hostel scope across campus (no academic department check).
+        - Academic complaints: group within same academic department.
+        - Must have both category_id and subcategory_id (not None/empty).
+        - Custom categories / subcategories are never grouped.
+        """
+        target_cat = target_complaint.get("category_id")
+        target_sub = target_complaint.get("subcategory_id")
+        target_cat_custom = target_complaint.get("category_custom")
+        target_sub_custom = target_complaint.get("subcategory_custom")
+
+        # Custom category or subcategory never groups
+        if target_cat_custom and str(target_cat_custom).strip():
+            return []
+        if target_sub_custom and str(target_sub_custom).strip():
+            return []
+
+        # Missing category or subcategory never groups
+        if not target_cat or not target_sub:
+            return []
+
+        target_id = target_complaint.get("complaint_id")
+        target_hostel = bool(target_complaint.get("is_hostel"))
+        target_dept = str(target_complaint.get("department_id") or "")
+
+        matches = []
+        for cand in candidate_complaints:
+            if cand.get("complaint_id") == target_id or cand.get("is_deleted"):
+                continue
+
+            cand_cat_custom = cand.get("category_custom")
+            cand_sub_custom = cand.get("subcategory_custom")
+            if (cand_cat_custom and str(cand_cat_custom).strip()) or (cand_sub_custom and str(cand_sub_custom).strip()):
+                continue
+
+            cand_cat = cand.get("category_id")
+            cand_sub = cand.get("subcategory_id")
+            if not cand_cat or not cand_sub:
+                continue
+
+            # Must match category_id and subcategory_id
+            if str(cand_cat).strip() != str(target_cat).strip():
+                continue
+            if str(cand_sub).strip() != str(target_sub).strip():
+                continue
+
+            cand_hostel = bool(cand.get("is_hostel"))
+            if target_hostel != cand_hostel:
+                continue
+
+            if not target_hostel:
+                cand_dept = str(cand.get("department_id") or "")
+                if target_dept != cand_dept:
+                    continue
+
+            matches.append(cand)
+
+        return matches

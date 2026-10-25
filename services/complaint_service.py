@@ -138,32 +138,61 @@ class ComplaintService:
 
             complaint_id = new_complaint["complaint_id"]
 
-            # 2. Run duplicate detection against existing complaints in the same department/hostel scope
-            cand_query = client.table("complaints").select(
-                "complaint_id, title, description, department_id, category_id, subcategory_id, location_id, is_hostel, is_deleted, issue_group_id, priority"
-            ).eq("department_id", department_id).eq("is_hostel", is_hostel).neq("complaint_id", complaint_id).eq("is_deleted", False)
+            # 2. Run deterministic category & subcategory grouping against existing complaints in scope
+            matches = []
+            is_groupable = (
+                category_id is not None
+                and subcategory_id is not None
+                and not (category_custom and str(category_custom).strip())
+                and not (subcategory_custom and str(subcategory_custom).strip())
+            )
 
-            candidates = cand_query.execute().data or []
-            duplicates = DuplicateService.find_duplicates(new_complaint, candidates, threshold=0.65)
+            if is_groupable:
+                cand_query = client.table("complaints").select(
+                    "complaint_id, title, description, department_id, category_id, subcategory_id, location_id, is_hostel, is_deleted, issue_group_id, priority, category_custom, subcategory_custom"
+                ).eq("is_hostel", is_hostel).eq("category_id", category_id).eq("subcategory_id", subcategory_id).neq("complaint_id", complaint_id).eq("is_deleted", False)
 
-            if duplicates:
-                top_match, score = duplicates[0]
+                if not is_hostel:
+                    cand_query = cand_query.eq("department_id", department_id)
+
+                candidates = cand_query.execute().data or []
+                matches = DuplicateService.find_category_subcategory_matches(new_complaint, candidates)
+
+            if matches:
+                # Prefer linking to an existing group member if one already exists
+                existing_grouped = next((m for m in matches if m.get("issue_group_id")), None)
+                target_match = existing_grouped if existing_grouped else matches[0]
+
                 # Link to existing or create new Issue Group
                 success, msg, grp_id = IssueGroupService.create_or_link_issue_group(
-                    primary_complaint_id=top_match["complaint_id"],
+                    primary_complaint_id=target_match["complaint_id"],
                     duplicate_complaint_id=complaint_id,
                     actor_role="System"
                 )
                 if grp_id:
-                    # Update duplicate count and auto priority
-                    dup_count = len(duplicates)
-                    auto_pri = DuplicateService.calculate_auto_priority(dup_count + 1, priority)
+                    # Update duplicate count and auto priority based on group size
+                    m_res = client.table("issue_group_members").select("complaint_id").eq("issue_group_id", grp_id).execute()
+                    group_size = len(m_res.data or [])
+                    auto_pri = DuplicateService.calculate_auto_priority(group_size, priority)
                     client.table("complaints").update({
                         "auto_priority": auto_pri,
                         "priority": auto_pri
                     }).eq("complaint_id", complaint_id).execute()
                     new_complaint["auto_priority"] = auto_pri
                     new_complaint["priority"] = auto_pri
+
+                    # If group reaches High (4+) or Urgent (6+), escalate existing members
+                    if group_size >= 4:
+                        for m in (m_res.data or []):
+                            m_cid = m.get("complaint_id")
+                            if m_cid and m_cid != complaint_id:
+                                try:
+                                    client.table("complaints").update({
+                                        "auto_priority": auto_pri,
+                                        "priority": auto_pri
+                                    }).eq("complaint_id", m_cid).execute()
+                                except Exception:
+                                    pass
 
             CacheService.invalidate_metrics()
             return True, f"Complaint #{complaint_id} submitted successfully.", new_complaint

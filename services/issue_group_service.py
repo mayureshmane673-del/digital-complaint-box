@@ -233,6 +233,7 @@ class IssueGroupService:
                         "id": m.get("id"),
                         "complaint_id": comp.get("complaint_id"),
                         "title": comp.get("title"),
+                        "description": comp.get("description", ""),
                         "status": comp.get("status", "Pending"),
                         "priority": comp.get("priority", "Low"),
                         "is_anonymous": comp.get("is_anonymous", False),
@@ -244,13 +245,19 @@ class IssueGroupService:
                         library_groups.add(gid)
                     if comp.get("is_anonymous"):
                         c_dict["student_info"] = "Anonymous Student"
+                        c_dict["student_id"] = None
+                        c_dict["students"] = None
                     members_by_group[gid].append(c_dict)
                 else:
                     members_by_group[gid].append({
                         "id": m.get("id"),
                         "complaint_id": m.get("complaint_id"),
+                        "title": f"Complaint #{m.get('complaint_id')}",
+                        "description": "",
                         "status": "Pending",
-                        "priority": "Low"
+                        "priority": "Low",
+                        "is_anonymous": False,
+                        "created_at": None
                     })
         except Exception:
             pass
