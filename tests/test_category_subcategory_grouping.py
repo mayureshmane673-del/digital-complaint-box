@@ -511,3 +511,395 @@ def test_get_complaint_by_id_masks_anonymous_student():
         assert item["student_id"] is None
         assert item["student_info"] == "Anonymous Student"
         assert item["students"] is None
+
+
+def test_end_to_end_rls_simulation_group_creation_without_mocking_issue_group_service():
+    """
+    Verifies that submit_complaint successfully creates an issue group end-to-end
+    WITHOUT mocking IssueGroupService, where anon client returns no rows (simulating RLS)
+    and trusted backend client returns realistic database rows.
+    """
+    tables = {
+        "complaints": [
+            {
+                "complaint_id": 111,
+                "id": "7bda3b07-b959-4a5f-8187-f5114d4b8c23",
+                "student_id": "6bf8ea7f-a490-4259-a5c1-e613956fe441",
+                "is_anonymous": False,
+                "department_id": "f4e141ef-14ca-44e4-a1ed-051ee0525419",
+                "is_hostel": False,
+                "title": "cleaning",
+                "description": "class room is not clean",
+                "category_id": "7f4e88c7-b75c-4919-995e-f345abbe8f89",
+                "subcategory_id": "9ce3180c-54d8-42c8-aa7a-6af2823f9619",
+                "location_id": "599be477-8601-481d-bd2a-510fbdfadec9",
+                "location_custom": None,
+                "category_custom": None,
+                "subcategory_custom": None,
+                "priority": "Medium",
+                "initial_priority": "Medium",
+                "auto_priority": "Medium",
+                "status": "Pending",
+                "is_deleted": False,
+                "issue_group_id": None
+            }
+        ],
+        "students": [
+            {
+                "id": "student-real-uuid-2",
+                "department_id": "f4e141ef-14ca-44e4-a1ed-051ee0525419",
+                "is_hostel": False,
+                "is_hostel_approved": False,
+                "is_locked": False
+            }
+        ],
+        "issue_groups": [],
+        "issue_group_members": [],
+        "issue_group_history": []
+    }
+
+    # Anon client (simulates live Supabase anon key blocked by RLS)
+    anon_client = MagicMock()
+    anon_table = MagicMock()
+    anon_table.select.return_value = anon_table
+    anon_table.eq.return_value = anon_table
+    anon_table.execute.return_value = MagicMock(data=[])  # RLS blocks anon -> 0 rows
+    anon_client.table.return_value = anon_table
+
+    # Trusted client (simulates service role client)
+    trusted_client = MagicMock()
+
+    class MockQueryBuilder:
+        def __init__(self, table_name):
+            self.table_name = table_name
+            self._filters = {}
+            self._neqs = {}
+
+        def select(self, *args, **kwargs):
+            return self
+
+        def eq(self, k, v):
+            self._filters[k] = v
+            return self
+
+        def neq(self, k, v):
+            self._neqs[k] = v
+            return self
+
+        def in_(self, k, v):
+            self._filters[k] = v
+            return self
+
+        def order(self, *args, **kwargs):
+            return self
+
+        def insert(self, payload):
+            if isinstance(payload, list):
+                for p in payload:
+                    if "id" not in p:
+                        p["id"] = f"mock-uuid-{len(tables[self.table_name]) + 1}"
+                    tables[self.table_name].append(p)
+                self._insert_data = payload
+            else:
+                p = dict(payload)
+                if "id" not in p:
+                    p["id"] = f"mock-uuid-{len(tables[self.table_name]) + 1}"
+                tables[self.table_name].append(p)
+                self._insert_data = [p]
+            return self
+
+        def update(self, updates):
+            # Apply update to matching items
+            for item in tables[self.table_name]:
+                matches = True
+                for k, v in self._filters.items():
+                    if item.get(k) != v:
+                        matches = False
+                        break
+                if matches:
+                    item.update(updates)
+            self._update_data = [updates]
+            return self
+
+        def execute(self):
+            if hasattr(self, "_insert_data"):
+                return MagicMock(data=self._insert_data)
+            if hasattr(self, "_update_data"):
+                return MagicMock(data=self._update_data)
+            rows = tables.get(self.table_name, [])
+            res = []
+            for r in rows:
+                match = True
+                for k, v in self._filters.items():
+                    if r.get(k) != v:
+                        match = False
+                        break
+                for k, v in self._neqs.items():
+                    if r.get(k) == v:
+                        match = False
+                        break
+                if match:
+                    res.append(r)
+            return MagicMock(data=res)
+
+    def trusted_table_dispatcher(name):
+        return MockQueryBuilder(name)
+
+    trusted_client.table.side_effect = trusted_table_dispatcher
+    rpc_mock = MagicMock()
+    # Atomic RPC returns new complaint 112
+    rpc_mock.execute.return_value = MagicMock(data={
+        "complaint_id": 112,
+        "title": "cleaning",
+        "description": "class room is not clean",
+        "department_id": "f4e141ef-14ca-44e4-a1ed-051ee0525419",
+        "category_id": "7f4e88c7-b75c-4919-995e-f345abbe8f89",
+        "subcategory_id": "9ce3180c-54d8-42c8-aa7a-6af2823f9619",
+        "location_id": "599be477-8601-481d-bd2a-510fbdfadec9",
+        "is_hostel": False,
+        "priority": "Medium",
+        "is_deleted": False,
+        "category_custom": None,
+        "subcategory_custom": None
+    })
+    trusted_client.rpc.return_value = rpc_mock
+
+    with patch("services.complaint_service.get_trusted_backend_client", return_value=trusted_client), \
+         patch("services.complaint_service._get_client", return_value=trusted_client), \
+         patch("services.issue_group_service._get_client", return_value=trusted_client), \
+         patch("services.issue_group_service.get_supabase_client", return_value=anon_client), \
+         patch("services.cache_service.CacheService.invalidate_metrics"), \
+         patch("services.cache_service.CacheService.invalidate_issue_groups"):
+
+        ok, msg, comp = ComplaintService.submit_complaint(
+            student_id="student-real-uuid-2",
+            title="cleaning",
+            description="class room is not clean",
+            department_id="f4e141ef-14ca-44e4-a1ed-051ee0525419",
+            category_id="7f4e88c7-b75c-4919-995e-f345abbe8f89",
+            subcategory_id="9ce3180c-54d8-42c8-aa7a-6af2823f9619",
+            location_id="599be477-8601-481d-bd2a-510fbdfadec9",
+            priority="Medium"
+        )
+
+        assert ok is True
+        # Verify that issue group was created in tables["issue_groups"]
+        assert len(tables["issue_groups"]) == 1
+        created_group = tables["issue_groups"][0]
+        assert created_group["primary_complaint_id"] == 111
+        # Both complaints #111 and #112 must now have issue_group_id pointing to created group
+        assert tables["complaints"][0]["issue_group_id"] == created_group["id"]
+        assert len(tables["issue_group_members"]) == 2
+
+
+def test_issue_group_service_role_access_boundaries():
+    """
+    Verifies that get_department_groups enforces strict role-based access:
+    - Principal: returns []
+    - Student: returns []
+    - Coordinator/HOD without department_id: returns []
+    - Coordinator/HOD with department_id: returns only their department
+    - Hostel Incharge: returns only hostel groups
+    """
+    mock_groups = [
+        {"id": "grp-cse", "title": "CSE Lab Fan", "department_id": "dept-cse", "is_hostel": False, "group_status": "Pending", "duplicate_count": 1},
+        {"id": "grp-mech", "title": "Mech Lathe", "department_id": "dept-mech", "is_hostel": False, "group_status": "Pending", "duplicate_count": 2},
+        {"id": "grp-hostel", "title": "Hostel Water", "department_id": "dept-cse", "is_hostel": True, "group_status": "Pending", "duplicate_count": 1},
+    ]
+
+    client_mock = MagicMock()
+
+    class FilterMock:
+        def __init__(self, data):
+            self.data = list(data)
+
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, k, v):
+            self.data = [d for d in self.data if d.get(k) == v]
+            return self
+
+        def in_(self, k, v):
+            self.data = [d for d in self.data if d.get(k) in v]
+            return self
+
+        def order(self, *a, **k):
+            return self
+
+        def execute(self):
+            return MagicMock(data=self.data)
+
+    def table_mock(name):
+        if name == "issue_groups":
+            return FilterMock(mock_groups)
+        elif name == "issue_group_members":
+            return FilterMock([])
+        return MagicMock()
+
+    client_mock.table.side_effect = table_mock
+
+    with patch("services.issue_group_service._get_client", return_value=client_mock), \
+         patch("services.cache_service.CacheService.get_cached_issue_groups", return_value=None), \
+         patch("services.cache_service.CacheService.set_cached_issue_groups"):
+
+        # 1. Principal gets empty list
+        assert IssueGroupService.get_department_groups(role="Principal") == []
+        assert IssueGroupService.get_department_groups(department_id="dept-cse", role="Principal") == []
+
+        # 2. Student gets empty list
+        assert IssueGroupService.get_department_groups(role="Student") == []
+
+        # 3. Coordinator / HOD without department_id gets empty list
+        assert IssueGroupService.get_department_groups(role="Coordinator", department_id=None) == []
+        assert IssueGroupService.get_department_groups(role="HOD", department_id=None) == []
+
+        # 4. Coordinator with CSE gets only CSE non-hostel
+        cse_res = IssueGroupService.get_department_groups(role="Coordinator", department_id="dept-cse")
+        assert len(cse_res) == 1
+        assert cse_res[0]["id"] == "grp-cse"
+
+        # 5. Hostel Incharge gets only hostel groups
+        hostel_res = IssueGroupService.get_department_groups(role="Hostel Incharge")
+        assert len(hostel_res) == 1
+        assert hostel_res[0]["id"] == "grp-hostel"
+
+
+def test_student_identity_and_roll_number_visibility_rules():
+    """
+    Verifies that:
+    - Anonymous complaints strictly return 'Anonymous Student' with None for student_id and roll_number.
+    - Non-anonymous complaints return full_name.
+    - Roll number is visible to Coordinator, HOD, and Hostel Incharge, but hidden (None) for Library Incharge.
+    """
+    mock_groups = [
+        {"id": "grp-1", "title": "Group 1", "department_id": "dept-cse", "is_hostel": False, "group_status": "Pending", "duplicate_count": 2}
+    ]
+    mock_members = [
+        {
+            "id": "m-1",
+            "issue_group_id": "grp-1",
+            "complaint_id": 101,
+            "complaints": {
+                "complaint_id": 101,
+                "title": "Anon complaint",
+                "description": "Desc anon",
+                "status": "Pending",
+                "priority": "Low",
+                "is_anonymous": True,
+                "created_at": "2026-10-25T10:00:00Z",
+                "student_id": "secret-id",
+                "students": {"full_name": "Real Name", "roll_number": "240101001"},
+                "categories": {"name": "Cleaning"}
+            }
+        },
+        {
+            "id": "m-2",
+            "issue_group_id": "grp-1",
+            "complaint_id": 102,
+            "complaints": {
+                "complaint_id": 102,
+                "title": "Named complaint",
+                "description": "Desc named",
+                "status": "Pending",
+                "priority": "Low",
+                "is_anonymous": False,
+                "created_at": "2026-10-25T11:00:00Z",
+                "student_id": "student-uuid-2",
+                "students": {"full_name": "Alice Smith", "roll_number": "240101002"},
+                "categories": {"name": "Cleaning"}
+            }
+        }
+    ]
+
+    client_mock = MagicMock()
+
+    class MemberFilterMock:
+        def __init__(self, data):
+            self.data = list(data)
+
+        def select(self, *a, **k):
+            return self
+
+        def in_(self, k, v):
+            return self
+
+        def eq(self, k, v):
+            return self
+
+        def order(self, *a, **k):
+            return self
+
+        def execute(self):
+            return MagicMock(data=self.data)
+
+    def table_mock(name):
+        if name == "issue_groups":
+            return MemberFilterMock(mock_groups)
+        elif name == "issue_group_members":
+            return MemberFilterMock(mock_members)
+        return MagicMock()
+
+    client_mock.table.side_effect = table_mock
+
+    with patch("services.issue_group_service._get_client", return_value=client_mock), \
+         patch("services.cache_service.CacheService.get_cached_issue_groups", return_value=None), \
+         patch("services.cache_service.CacheService.set_cached_issue_groups"):
+
+        # Coordinator sees roll number for non-anonymous, but masked for anonymous
+        coord_res = IssueGroupService.get_department_groups(department_id="dept-cse", role="Coordinator")
+        assert len(coord_res) == 1
+        members = coord_res[0]["members"]
+        m_anon = next(m for m in members if m["complaint_id"] == 101)
+        m_named = next(m for m in members if m["complaint_id"] == 102)
+
+        # Anonymous checks
+        assert m_anon["student_info"] == "Anonymous Student"
+        assert m_anon["student_name"] == "Anonymous Student"
+        assert m_anon["roll_number"] is None
+        assert m_anon["student_id"] is None
+
+        # Named checks for Coordinator (shows full_name and roll_number)
+        assert m_named["student_name"] == "Alice Smith"
+        assert m_named["roll_number"] == "240101002"
+        assert m_named["student_info"] == "Alice Smith (240101002)"
+
+        # Library Incharge checks (shows full_name, but roll_number is None)
+        lib_groups = [
+            {"id": "grp-lib", "title": "Group Lib", "department_id": "dept-cse", "is_hostel": False, "group_status": "Pending", "duplicate_count": 1}
+        ]
+        lib_members = [
+            {
+                "id": "m-lib",
+                "issue_group_id": "grp-lib",
+                "complaint_id": 103,
+                "complaints": {
+                    "complaint_id": 103,
+                    "title": "Book missing",
+                    "description": "Desc book",
+                    "status": "Pending",
+                    "priority": "Low",
+                    "is_anonymous": False,
+                    "created_at": "2026-10-25T12:00:00Z",
+                    "student_id": "student-uuid-3",
+                    "students": {"full_name": "Bob Jones", "roll_number": "240101003"},
+                    "categories": {"name": "Library"}
+                }
+            }
+        ]
+
+        def lib_table_mock(name):
+            if name == "issue_groups":
+                return MemberFilterMock(lib_groups)
+            elif name == "issue_group_members":
+                return MemberFilterMock(lib_members)
+            return MagicMock()
+
+        client_mock.table.side_effect = lib_table_mock
+        lib_res = IssueGroupService.get_department_groups(role="Library Incharge")
+        assert len(lib_res) == 1
+        lib_m = lib_res[0]["members"][0]
+        assert lib_m["student_name"] == "Bob Jones"
+        assert lib_m["roll_number"] is None
+        assert lib_m["student_info"] == "Bob Jones"
+

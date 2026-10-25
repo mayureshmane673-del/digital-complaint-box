@@ -4,6 +4,7 @@ Handles concurrency-safe sequence generation, anonymous privacy, 10-minute edit 
 role-based status transitions, soft deletes, assignments, priority enforcement, and audit logs.
 """
 
+import logging
 from typing import Tuple, Optional, Dict, Any, List
 from datetime import datetime, timezone
 from database.supabase_client import get_supabase_client, get_trusted_backend_client
@@ -15,6 +16,8 @@ from concurrent.futures import ThreadPoolExecutor
 from services.cache_service import CacheService
 from models.user import UserRole
 from models.complaint import ComplaintStatus, ComplaintPriority
+
+logger = logging.getLogger("complaint_box.complaint_service")
 
 
 def _get_client():
@@ -169,7 +172,9 @@ class ComplaintService:
                     duplicate_complaint_id=complaint_id,
                     actor_role="System"
                 )
-                if grp_id:
+                if not success:
+                    logger.warning("Issue group linkage failed for complaint #%s: %s", complaint_id, msg)
+                elif grp_id:
                     # Update duplicate count and auto priority based on group size
                     m_res = client.table("issue_group_members").select("complaint_id").eq("issue_group_id", grp_id).execute()
                     group_size = len(m_res.data or [])
