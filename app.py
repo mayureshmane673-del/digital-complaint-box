@@ -390,53 +390,7 @@ def main(page: ft.Page):
         render_portal_view()
         return
 
-    # Visual QA / Review routing support
-    def handle_qa_route(route_str: str) -> bool:
-        if not route_str or ("qa_auth=1" not in route_str and "/qa" not in route_str):
-            return False
-        import urllib.parse
-        parsed = urllib.parse.urlparse(route_str)
-        params = urllib.parse.parse_qs(parsed.query)
-        if params.get("qa_auth") == ["1"]:
-            role_p = params.get("role", ["student"])[0].lower()
-            tab_p = int(params.get("tab", [0])[0])
-            if role_p == "student":
-                from services.auth_service import AuthService
-                ok, _, u = AuthService.login_student("240101030", "Pass@123")
-                if ok and u:
-                    save_auth_session(page, u, "Student")
-                    AppState.set_user(u, "Student")
-                    render_portal_view(initial_tab=tab_p)
-                    if not u.get("must_change_password") and params.get("detail") == ["1"]:
-                        from ui.components.complaint_detail import show_complaint_detail_dialog
-                        from services.complaint_service import ComplaintService
-                        cmps = ComplaintService.get_complaints_for_user(role="Student", user_id=u["id"], department_id=u.get("department_id"))
-                        if cmps:
-                            show_complaint_detail_dialog(
-                                page,
-                                cmps[0],
-                                current_role="Student",
-                                current_user_id=u["id"],
-                                current_dept_id=u.get("department_id"),
-                                on_updated=None
-                            )
-                    return True
-            elif role_p == "coordinator":
-                from services.auth_service import AuthService
-                ok, _, u = AuthService.login_staff("Coordinator", "msm", "Pass@123", "Pass@123", "f4e141ef-14ca-44e4-a1ed-051ee0525419")
-                if ok and u:
-                    save_auth_session(page, u, "Coordinator")
-                    AppState.set_user(u, "Coordinator")
-                    render_portal_view(initial_tab=tab_p)
-                    return True
-            elif role_p == "coordinator_login":
-                render_auth_view(initial_tab=2)
-                return True
-        return False
 
-    page.on_route_change = lambda e: handle_qa_route(page.route)
-    if handle_qa_route(getattr(page, "route", "")):
-        return
 
     # If this is a new Flet session (e.g. mobile reload, socket reconnect drop, new tab),
     # perform deterministic async persistent authentication restoration.
