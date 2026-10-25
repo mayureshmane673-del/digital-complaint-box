@@ -130,8 +130,7 @@ def show_notification_dialog(
                     current_unread = max(0, current_unread - 1)
                     if on_badge_update:
                         on_badge_update(current_unread)
-                dlg.open = False
-                page.update()
+                close_dialog(page, dlg)
                 if on_select_reference and r_type and r_id:
                     on_select_reference(r_type, r_id)
             return on_click_note

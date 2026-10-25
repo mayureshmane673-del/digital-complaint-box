@@ -393,7 +393,7 @@ def show_complaint_detail_dialog(
                     )
                     if ok:
                         show_feedback_message(page, msg, is_error=False)
-                        dlg.open = False
+                        close_dialog(page, dlg)
                         if on_updated:
                             on_updated()
                     else:

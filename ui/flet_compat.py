@@ -312,39 +312,39 @@ def open_dialog(page: ft.Page, dialog: ft.Control):
 
 def close_dialog(page: ft.Page, dialog: ft.Control = None):
     """Reliable helper to close a dialog in Flet 0.86+ and earlier versions."""
-    if dialog is not None:
-        dialog.open = False
+    target_dialog = dialog
+    if target_dialog is None and hasattr(page, "pop_dialog"):
         try:
-            dialog.update()
+            target_dialog = page.pop_dialog()
+            return
         except Exception:
             pass
-        if hasattr(page, "_remove_dialog"):
+
+    if target_dialog is not None:
+        target_dialog.open = False
+        try:
+            target_dialog.update()
+        except Exception:
+            pass
+        if getattr(page, "dialog", None) is target_dialog:
+            page.dialog = None
             try:
-                page._remove_dialog(dialog)
-            except Exception:
-                pass
-        elif hasattr(page, "_dialogs") and hasattr(page._dialogs, "controls") and dialog in page._dialogs.controls:
-            try:
-                page._dialogs.controls.remove(dialog)
-                page._dialogs.update()
+                page.update()
             except Exception:
                 pass
     else:
-        if hasattr(page, "pop_dialog"):
+        if getattr(page, "dialog", None):
+            dlg = page.dialog
+            dlg.open = False
             try:
-                popped = page.pop_dialog()
-                if popped and hasattr(page, "_remove_dialog"):
-                    page._remove_dialog(popped)
-                elif popped and hasattr(page, "_dialogs") and hasattr(page._dialogs, "controls") and popped in page._dialogs.controls:
-                    page._dialogs.controls.remove(popped)
-                    page._dialogs.update()
+                dlg.update()
             except Exception:
                 pass
-    page.dialog = None
-    try:
-        page.update()
-    except Exception:
-        pass
+            page.dialog = None
+            try:
+                page.update()
+            except Exception:
+                pass
 
 def clear_all_dialogs(page: ft.Page):
     """Completely purges all open dialogs, SnackBars, and modal route barriers from the page."""
